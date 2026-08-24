@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="apps/guruterminal/assets/icon.svg" alt="Guru Terminal" width="108" />
+<img src="apps/guruterminal/assets/chimp-icon.png" alt="Guru Terminal" width="108" />
 
 # Guru Terminal
 
