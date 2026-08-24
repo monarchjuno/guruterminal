@@ -5,7 +5,7 @@ import { MockGuruTerminalBridge } from "../../bridge";
 import { chooseGuru, openApp } from "../renderApp";
 
 describe("Guru Terminal · Chat streaming and concurrency", () => {
-  it("shows the submitted prompt and a response placeholder before progress arrives", async () => {
+  it("shows the submitted prompt and live response status before progress arrives", async () => {
     const user = userEvent.setup();
     const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });
     vi.spyOn(bridge, "chatSend").mockImplementation(
@@ -23,7 +23,10 @@ describe("Guru Terminal · Chat streaming and concurrency", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("오늘 하이닉스 어땠어?")).toBeVisible();
-    expect(await screen.findByText("Starting response…")).toBeVisible();
+    const progress = await screen.findByLabelText("Work progress");
+    expect(
+      within(progress).getByRole("button", { name: /Working · Preparing response ·/ }),
+    ).toBeVisible();
     expect(screen.queryByText(/Provider reasoning/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Reasoning/ }),
@@ -47,15 +50,18 @@ describe("Guru Terminal · Chat streaming and concurrency", () => {
       expect(
         within(process).getByRole("button", { name: /Working ·/ }),
       ).toHaveAttribute("aria-expanded", "true");
+      expect(process).toHaveTextContent("Searched Memory");
     });
-    expect(process).toHaveTextContent("Searched Memory");
 
-    const heading = await screen.findByRole("heading", {
-      name: "Assessment",
-      level: 3,
+    const liveResponse = await screen.findByText("### Assessment", {
+      exact: false,
     });
-    const message = heading.closest("article");
+    const message = liveResponse.closest("article");
     expect(message).toHaveClass("streaming");
+    expect(liveResponse).toHaveClass("message-response-live");
+    expect(
+      message!.querySelector('[data-streamdown="heading-3"]'),
+    ).toBeNull();
     const liveMemoryGroup = await within(process).findByRole("button", {
       name: /Memory · 2 actions/,
     });
@@ -67,6 +73,11 @@ describe("Guru Terminal · Chat streaming and concurrency", () => {
     await waitFor(() => expect(message).toHaveClass("complete"), {
       timeout: 15_000,
     });
+    const heading = await screen.findByRole("heading", {
+      name: "Assessment",
+      level: 3,
+    });
+    expect(heading.closest("article")).toBe(message);
     expect(
       message!.querySelector('[data-streamdown="unordered-list"]'),
     ).toBeVisible();

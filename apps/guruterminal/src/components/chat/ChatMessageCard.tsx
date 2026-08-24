@@ -140,13 +140,9 @@ export function ChatMessageCard({
   const appliedCommitId = memoryUpdate?.commitId ?? null;
   const timelineItems = message.progress?.items ?? [];
   const hasActivity = timelineItems.length > 0;
-  const showPendingResponse =
-    message.role === "assistant" &&
-    message.status === "streaming" &&
-    !message.content &&
-    !hasActivity;
-  const showMessageBody =
-    message.role === "user" || !!message.content || showPendingResponse;
+  const isLiveAssistantResponse =
+    message.role === "assistant" && message.status === "streaming";
+  const showMessageBody = message.role === "user" || !!message.content;
   const executionModelTitle = message.execution_model
     ? [
         message.execution_model.provider,
@@ -168,38 +164,36 @@ export function ChatMessageCard({
           </span>
         )}
       </div>
-      {message.role === "assistant" && timelineItems.length > 0 && (
-        <ChatProgressTimeline
-          progress={
-            message.progress
-              ? message.progress
-              : {
-                  startedAtMs: Date.parse(message.created_at),
-                  items: [],
-                }
-          }
-          status={message.status}
-          onOpenLink={onOpenLink}
-        />
-      )}
+      {message.role === "assistant" &&
+        (hasActivity || isLiveAssistantResponse) && (
+          <ChatProgressTimeline
+            progress={
+              message.progress
+                ? message.progress
+                : {
+                    startedAtMs: Date.parse(message.created_at),
+                    items: [],
+                  }
+            }
+            status={message.status}
+            onOpenLink={onOpenLink}
+          />
+        )}
       {showMessageBody && (
         <Message from={message.role} className="max-w-full">
           <MessageContent className="message-content overflow-visible">
             {!!message.content &&
               (message.role === "user" ? (
                 <p className="message-user-text">{message.content}</p>
+              ) : message.status === "streaming" ? (
+                <p className="message-response-live">{message.content}</p>
               ) : (
                 <SafeMessageResponse
                   text={message.content}
-                  isAnimating={message.status === "streaming"}
+                  isAnimating={false}
                   onOpenLink={onOpenLink}
                 />
               ))}
-            {showPendingResponse && (
-              <span className="message-response-pending">
-                Starting response…
-              </span>
-            )}
           </MessageContent>
         </Message>
       )}
