@@ -12,6 +12,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from release_asset_contract import (
+    METADATA_REPOSITORY,
+    METADATA_SCHEMA_VERSION,
+    METADATA_TAG,
+    METADATA_VERSION,
+    RELEASE_METADATA_NAME,
+    RELEASE_METADATA_SCHEMA,
+    UPDATER_MANIFEST_NAME,
+    updater_artifact_names,
+)
+
 
 STABLE_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
@@ -28,14 +39,14 @@ def routes(assets: Path, repository: str) -> dict[str, Path]:
         raise RuntimeError("candidate assets path must be a real directory")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         raise RuntimeError("repository must be an owner/name pair")
-    metadata_path = require_file(assets / "RELEASE-METADATA.json")
+    metadata_path = require_file(assets / RELEASE_METADATA_NAME)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if metadata.get("schema_version") != 2:
+    if metadata.get(METADATA_SCHEMA_VERSION) != RELEASE_METADATA_SCHEMA:
         raise RuntimeError("candidate release metadata schema is unsupported")
-    if metadata.get("repository") != repository:
+    if metadata.get(METADATA_REPOSITORY) != repository:
         raise RuntimeError("candidate repository does not match the proxy repository")
-    tag = metadata.get("tag")
-    version = metadata.get("version")
+    tag = metadata.get(METADATA_TAG)
+    version = metadata.get(METADATA_VERSION)
     if (
         not isinstance(tag, str)
         or not isinstance(version, str)
@@ -43,13 +54,10 @@ def routes(assets: Path, repository: str) -> dict[str, Path]:
         or tag != f"v{version}"
     ):
         raise RuntimeError("candidate metadata tag and version are invalid")
-    manifest = require_file(assets / "latest.json")
-    updater_names = [
-        f"Guru Terminal-{version}-darwin-aarch64.app.tar.gz",
-        f"Guru Terminal-{version}-x86_64-pc-windows-msvc-setup.exe",
-    ]
+    manifest = require_file(assets / UPDATER_MANIFEST_NAME)
+    updater_names = updater_artifact_names(version).values()
     prefix = f"/{repository}/releases"
-    result = {f"{prefix}/latest/download/latest.json": manifest}
+    result = {f"{prefix}/latest/download/{UPDATER_MANIFEST_NAME}": manifest}
     for name in updater_names:
         result[f"{prefix}/download/{tag}/{name}"] = require_file(assets / name)
     return result

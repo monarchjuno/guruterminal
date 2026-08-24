@@ -7,6 +7,13 @@ import argparse
 import shutil
 from pathlib import Path
 
+from release_asset_contract import (
+    macos_installer_name,
+    macos_updater_name,
+    updater_signature_name,
+    windows_updater_name,
+)
+
 
 def exactly_one(root: Path, pattern: str) -> Path:
     matches = sorted(path for path in root.rglob(pattern) if path.is_file())
@@ -39,19 +46,17 @@ def main() -> int:
         copy(
             installer,
             arguments.output,
-            f"Guru Terminal-{arguments.version}-aarch64-apple-darwin.dmg",
+            macos_installer_name(arguments.version),
         )
-        updater_name = f"Guru Terminal-{arguments.version}-darwin-aarch64.app.tar.gz"
+        updater_name = macos_updater_name(arguments.version)
         copy(updater, arguments.output, updater_name)
     else:
         updater = exactly_one(arguments.bundle_root / "nsis", "*-setup.exe")
         signature = exactly_one(arguments.bundle_root / "nsis", "*-setup.exe.sig")
-        updater_name = (
-            f"Guru Terminal-{arguments.version}-x86_64-pc-windows-msvc-setup.exe"
-        )
+        updater_name = windows_updater_name(arguments.version)
         copy(updater, arguments.output, updater_name)
 
-    copy(signature, arguments.output, updater_name + ".sig")
+    copy(signature, arguments.output, updater_signature_name(updater_name))
     return 0
 
 

@@ -10,6 +10,25 @@ import re
 import shutil
 from pathlib import Path
 
+from release_asset_contract import (
+    METADATA_ARTIFACTS,
+    METADATA_DOWNLOAD_ALIASES,
+    METADATA_MACOS_BUNDLE_VERSION,
+    METADATA_REPOSITORY,
+    METADATA_SCHEMA_VERSION,
+    METADATA_SOURCE_COMMIT,
+    METADATA_TAG,
+    METADATA_UPDATER_MANIFEST,
+    METADATA_VERSION,
+    METADATA_WORKFLOW_RUN_ID,
+    RELEASE_METADATA_NAME,
+    RELEASE_METADATA_SCHEMA,
+    SHA256SUMS_NAME,
+    UPDATER_MANIFEST_NAME,
+    canonical_asset_names,
+    download_aliases,
+)
+
 
 RELEASE_VERSION = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -31,18 +50,6 @@ def sha256(path: Path) -> str:
 def require_regular_file(path: Path) -> None:
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError(f"release asset must be a nonempty regular file: {path}")
-
-
-def canonical_names(version: str) -> list[str]:
-    return [
-        f"Guru Terminal-{version}-aarch64-apple-darwin.dmg",
-        f"Guru Terminal-{version}-darwin-aarch64.app.tar.gz",
-        f"Guru Terminal-{version}-darwin-aarch64.app.tar.gz.sig",
-        f"Guru Terminal-{version}-x86_64-pc-windows-msvc-setup.exe",
-        f"Guru Terminal-{version}-x86_64-pc-windows-msvc-setup.exe.sig",
-        f"Guru Terminal-{version}.spdx.json",
-        "latest.json",
-    ]
 
 
 def main() -> int:
@@ -77,15 +84,12 @@ def main() -> int:
     if not arguments.assets.is_dir() or arguments.assets.is_symlink():
         raise RuntimeError("release assets path must be a real directory")
 
-    canonical = canonical_names(arguments.version)
+    canonical = canonical_asset_names(arguments.version)
     for name in canonical:
         require_regular_file(arguments.assets / name)
 
-    aliases = {
-        "GuruTerminal-macOS-arm64.dmg": canonical[0],
-        "GuruTerminal-Windows-x64.exe": canonical[3],
-    }
-    reserved = [*aliases, "RELEASE-METADATA.json", "SHA256SUMS"]
+    aliases = download_aliases(arguments.version)
+    reserved = [*aliases, RELEASE_METADATA_NAME, SHA256SUMS_NAME]
     for name in reserved:
         path = arguments.assets / name
         if path.exists() or path.is_symlink():
@@ -97,18 +101,18 @@ def main() -> int:
         shutil.copyfile(arguments.assets / source, arguments.assets / alias)
 
     metadata = {
-        "schema_version": 2,
-        "repository": arguments.repository,
-        "tag": arguments.tag,
-        "version": arguments.version,
-        "source_commit": arguments.source_commit,
-        "workflow_run_id": arguments.workflow_run_id,
-        "macos_bundle_version": arguments.macos_bundle_version,
-        "updater_manifest": "latest.json",
-        "artifacts": {
+        METADATA_SCHEMA_VERSION: RELEASE_METADATA_SCHEMA,
+        METADATA_REPOSITORY: arguments.repository,
+        METADATA_TAG: arguments.tag,
+        METADATA_VERSION: arguments.version,
+        METADATA_SOURCE_COMMIT: arguments.source_commit,
+        METADATA_WORKFLOW_RUN_ID: arguments.workflow_run_id,
+        METADATA_MACOS_BUNDLE_VERSION: arguments.macos_bundle_version,
+        METADATA_UPDATER_MANIFEST: UPDATER_MANIFEST_NAME,
+        METADATA_ARTIFACTS: {
             name: {"sha256": sha256(arguments.assets / name)} for name in canonical
         },
-        "download_aliases": {
+        METADATA_DOWNLOAD_ALIASES: {
             alias: {
                 "canonical": source,
                 "sha256": sha256(arguments.assets / alias),
@@ -116,14 +120,14 @@ def main() -> int:
             for alias, source in aliases.items()
         },
     }
-    metadata_path = arguments.assets / "RELEASE-METADATA.json"
+    metadata_path = arguments.assets / RELEASE_METADATA_NAME
     metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
     checksum_names = sorted([*canonical, *aliases, metadata_path.name])
-    checksum_path = arguments.assets / "SHA256SUMS"
+    checksum_path = arguments.assets / SHA256SUMS_NAME
     checksum_path.write_text(
         "".join(
             f"{sha256(arguments.assets / name)}  {name}\n" for name in checksum_names
