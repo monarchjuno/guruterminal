@@ -85,6 +85,7 @@ check_web() {
     node --check agent/native-search/xai.mjs
     node --check agent/guruterminal-provider-extension.mjs
     node --check scripts/verify-updater-signatures.mjs
+    node --test scripts/verify-updater-signatures.test.mjs
     node --test agent/*.test.mjs
     (cd compute && npm test)
     npm test
