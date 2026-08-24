@@ -3,5 +3,6 @@
 .ruff_cache/
 build/
 dist/
+test-output/
 *.spec
 __pycache__/
