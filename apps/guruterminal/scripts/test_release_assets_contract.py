@@ -5,11 +5,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from release_asset_contract import (  # noqa: E402
+    canonical_asset_names,
+    download_aliases,
+    updater_artifact_names,
+)
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -20,6 +29,7 @@ SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 WORKFLOW_RUN_ID = "42"
 MACOS_BUNDLE_VERSION = "17"
 PUBLISHED_AT = "2026-08-25T00:00:00Z"
+SERVE_UPDATE_CANDIDATE = runpy.run_path(str(SCRIPTS / "serve-update-candidate.py"))
 
 
 def sha256(path: Path) -> str:
@@ -122,6 +132,110 @@ class ReleaseAssetsContractTest(unittest.TestCase):
             "".join(f"{sha256(assets / name)}  {name}\n" for name in names),
             encoding="utf-8",
         )
+
+    def test_shared_vocabulary_matches_the_published_asset_contract(self) -> None:
+        macos_updater = f"Guru Terminal-{VERSION}-darwin-aarch64.app.tar.gz"
+        windows_updater = f"Guru Terminal-{VERSION}-x86_64-pc-windows-msvc-setup.exe"
+        self.assertEqual(
+            canonical_asset_names(VERSION),
+            [
+                f"Guru Terminal-{VERSION}-aarch64-apple-darwin.dmg",
+                macos_updater,
+                f"{macos_updater}.sig",
+                windows_updater,
+                f"{windows_updater}.sig",
+                f"Guru Terminal-{VERSION}.spdx.json",
+                "latest.json",
+            ],
+        )
+        self.assertEqual(
+            updater_artifact_names(VERSION),
+            {
+                "darwin-aarch64": macos_updater,
+                "windows-x86_64": windows_updater,
+            },
+        )
+        self.assertEqual(
+            download_aliases(VERSION),
+            {
+                "GuruTerminal-macOS-arm64.dmg": (
+                    f"Guru Terminal-{VERSION}-aarch64-apple-darwin.dmg"
+                ),
+                "GuruTerminal-Windows-x64.exe": windows_updater,
+            },
+        )
+
+    def test_prepare_normalizes_macos_and_windows_bundle_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            macos_bundle = temporary / "macos-bundle"
+            macos_output = temporary / "macos-assets"
+            (macos_bundle / "dmg").mkdir(parents=True)
+            (macos_bundle / "macos").mkdir()
+            (macos_bundle / "dmg" / "fixture.dmg").write_bytes(b"fixture dmg\n")
+            (macos_bundle / "macos" / "fixture.app.tar.gz").write_bytes(
+                b"fixture mac updater\n"
+            )
+            (macos_bundle / "macos" / "fixture.app.tar.gz.sig").write_bytes(
+                b"fixture mac signature\n"
+            )
+            self.assert_script_succeeds(
+                "prepare-release-assets.py",
+                "--platform",
+                "macos",
+                "--version",
+                VERSION,
+                "--bundle-root",
+                str(macos_bundle),
+                "--output",
+                str(macos_output),
+            )
+            self.assertEqual(
+                {path.name for path in macos_output.iterdir()},
+                set(canonical_asset_names(VERSION)[:3]),
+            )
+
+            windows_bundle = temporary / "windows-bundle"
+            windows_output = temporary / "windows-assets"
+            (windows_bundle / "nsis").mkdir(parents=True)
+            (windows_bundle / "nsis" / "fixture-setup.exe").write_bytes(
+                b"fixture windows updater\n"
+            )
+            (windows_bundle / "nsis" / "fixture-setup.exe.sig").write_bytes(
+                b"fixture windows signature\n"
+            )
+            self.assert_script_succeeds(
+                "prepare-release-assets.py",
+                "--platform",
+                "windows",
+                "--version",
+                VERSION,
+                "--bundle-root",
+                str(windows_bundle),
+                "--output",
+                str(windows_output),
+            )
+            self.assertEqual(
+                {path.name for path in windows_output.iterdir()},
+                set(canonical_asset_names(VERSION)[3:5]),
+            )
+
+    def test_candidate_server_routes_the_shared_updater_asset_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            assets = Path(temporary_directory) / "release-assets"
+            self.assemble_candidate(assets)
+            route_map = SERVE_UPDATE_CANDIDATE["routes"](assets, REPOSITORY)
+            prefix = f"/{REPOSITORY}/releases"
+            resolved_assets = assets.resolve()
+            expected = {
+                f"{prefix}/latest/download/latest.json": (
+                    resolved_assets / "latest.json"
+                ),
+            } | {
+                f"{prefix}/download/{TAG}/{name}": resolved_assets / name
+                for name in updater_artifact_names(VERSION).values()
+            }
+            self.assertEqual(route_map, expected)
 
     def test_generate_finalize_and_verify_a_complete_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from release_asset_contract import updater_artifact_names, updater_signature_name
+
 
 RELEASE_VERSION = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -18,7 +20,7 @@ RELEASE_VERSION = re.compile(
 
 
 def signature_for(artifact: Path) -> str:
-    signature = artifact.with_name(artifact.name + ".sig")
+    signature = artifact.with_name(updater_signature_name(artifact.name))
     if not artifact.is_file() or not signature.is_file():
         raise RuntimeError(f"missing updater artifact or signature: {artifact}")
     value = signature.read_text(encoding="utf-8").strip()
@@ -44,10 +46,8 @@ def main() -> int:
     datetime.fromisoformat(arguments.pub_date.replace("Z", "+00:00"))
 
     artifacts = {
-        "darwin-aarch64": arguments.assets
-        / f"Guru Terminal-{arguments.version}-darwin-aarch64.app.tar.gz",
-        "windows-x86_64": arguments.assets
-        / f"Guru Terminal-{arguments.version}-x86_64-pc-windows-msvc-setup.exe",
+        platform: arguments.assets / name
+        for platform, name in updater_artifact_names(arguments.version).items()
     }
     base_url = (
         f"https://github.com/{arguments.repository}/releases/download/"
