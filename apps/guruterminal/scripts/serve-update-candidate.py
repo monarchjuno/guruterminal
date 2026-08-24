@@ -30,6 +30,8 @@ def routes(assets: Path, repository: str) -> dict[str, Path]:
         raise RuntimeError("repository must be an owner/name pair")
     metadata_path = require_file(assets / "RELEASE-METADATA.json")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("schema_version") != 2:
+        raise RuntimeError("candidate release metadata schema is unsupported")
     if metadata.get("repository") != repository:
         raise RuntimeError("candidate repository does not match the proxy repository")
     tag = metadata.get("tag")

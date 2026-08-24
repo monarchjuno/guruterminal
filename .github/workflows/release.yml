@@ -10,8 +10,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: guruterminal-release-${{ github.ref }}
+  group: guruterminal-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   validate:
@@ -20,8 +21,8 @@ jobs:
     outputs:
       version: ${{ steps.identity.outputs.version }}
       prerelease: ${{ steps.identity.outputs.prerelease }}
-      update_endpoints: ${{ steps.identity.outputs.update_endpoints }}
       source_commit: ${{ steps.identity.outputs.source_commit }}
+      macos_bundle_version: ${{ steps.macos_bundle_version.outputs.value }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -49,23 +50,52 @@ jobs:
           test "$DESKTOP_VERSION" = "$APP_VERSION"
           test "$CORE_VERSION" = "$APP_VERSION"
           test "$GITHUB_REF_NAME" = "v$APP_VERSION"
-          if [[ "$APP_VERSION" =~ ^((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-rc\.([1-9][0-9]*)$ ]]; then
+          [[ "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          if [[ "$APP_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.([1-9][0-9]*)$ ]]; then
             PRERELEASE=true
-            RC_BASE="${BASH_REMATCH[1]}"
-            RC_NUMBER="${BASH_REMATCH[5]}"
-            NEXT_RC=$((RC_NUMBER + 1))
-            UPDATE_ENDPOINTS="[\"https://github.com/monarchjuno/guruterminal/releases/download/v${RC_BASE}-rc.${NEXT_RC}/latest.json\",\"https://github.com/monarchjuno/guruterminal/releases/latest/download/latest.json\"]"
           elif [[ "$APP_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             PRERELEASE=false
-            UPDATE_ENDPOINTS='["https://github.com/monarchjuno/guruterminal/releases/latest/download/latest.json"]'
           else
             echo "Releases must use canonical X.Y.Z or X.Y.Z-rc.N without build metadata." >&2
             exit 1
           fi
           echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "update_endpoints=$UPDATE_ENDPOINTS" >> "$GITHUB_OUTPUT"
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - id: macos_bundle_version
+        name: Allocate a monotonic macOS bundle build number
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          METADATA_DIRECTORY="$RUNNER_TEMP/retained-release-metadata"
+          RELEASE_TAGS="$RUNNER_TEMP/retained-release-tags.txt"
+          mkdir -p "$METADATA_DIRECTORY"
+          gh release list \
+            --repo "$GITHUB_REPOSITORY" \
+            --limit 1000 \
+            --json tagName \
+            --jq '.[].tagName' > "$RELEASE_TAGS"
+          release_index=0
+          while IFS= read -r release_tag; do
+            test -n "$release_tag"
+            release_index=$((release_index + 1))
+            destination="$METADATA_DIRECTORY/$release_index"
+            mkdir "$destination"
+            gh release download "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern RELEASE-METADATA.json \
+              --dir "$destination"
+          done < "$RELEASE_TAGS"
+          MACOS_BUNDLE_VERSION="$(
+            python3 apps/guruterminal/scripts/next-macos-bundle-version.py \
+              --run-number "$GITHUB_RUN_NUMBER" \
+              --release-metadata-directory "$METADATA_DIRECTORY"
+          )"
+          [[ "$MACOS_BUNDLE_VERSION" =~ ^[1-9][0-9]*$ ]]
+          echo "value=$MACOS_BUNDLE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Require exact source commit to have passed protected CI
         shell: bash
@@ -303,14 +333,24 @@ jobs:
         shell: bash
         env:
           GURUTERMINAL_UPDATER_PUBLIC_KEY: ${{ secrets.GURUTERMINAL_UPDATER_PUBLIC_KEY }}
-          GURUTERMINAL_UPDATE_ENDPOINTS: ${{ needs.validate.outputs.update_endpoints }}
+          GURUTERMINAL_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          GURUTERMINAL_MACOS_BUNDLE_VERSION: ${{ needs.validate.outputs.macos_bundle_version }}
         run: |
           set -euo pipefail
           RELEASE_CONFIG="$RUNNER_TEMP/guruterminal-tauri-release.json"
           python3 apps/guruterminal/scripts/create-release-config.py \
             --platform macos \
+            --version "$GURUTERMINAL_RELEASE_VERSION" \
+            --macos-bundle-version "$GURUTERMINAL_MACOS_BUNDLE_VERSION" \
             --release-config apps/guruterminal/src-tauri/tauri.release.conf.json \
             --output "$RELEASE_CONFIG"
+          python3 - "$RELEASE_CONFIG" "$GURUTERMINAL_MACOS_BUNDLE_VERSION" <<'PY'
+          import json
+          import sys
+
+          config = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert config["bundle"]["macOS"]["bundleVersion"] == sys.argv[2]
+          PY
           echo "GURUTERMINAL_TAURI_RELEASE_CONFIG=$RELEASE_CONFIG" >> "$GITHUB_ENV"
 
       - name: Stage and sign sidecars and OpenBB runtime
@@ -371,6 +411,7 @@ jobs:
         shell: bash
         env:
           APPLE_TEAM_ID: ${{ secrets.GURUTERMINAL_APPLE_TEAM_ID }}
+          GURUTERMINAL_MACOS_BUNDLE_VERSION: ${{ needs.validate.outputs.macos_bundle_version }}
         run: |
           set -euo pipefail
           BUNDLE_ROOT="apps/guruterminal/src-tauri/target/aarch64-apple-darwin/release/bundle"
@@ -388,6 +429,7 @@ jobs:
           python3 apps/guruterminal/scripts/check-macos-bundle-version.py \
             --tauri-config apps/guruterminal/src-tauri/tauri.conf.json \
             --source-plist apps/guruterminal/src-tauri/Info.plist \
+            --expected-bundle-version "$GURUTERMINAL_MACOS_BUNDLE_VERSION" \
             --bundle-plist "$APP_BUNDLE/Contents/Info.plist"
           PI_RUNTIME="$APP_BUNDLE/Contents/Resources/pi-runtime"
           PI_BINARY="$PI_RUNTIME/guruterminal-pi"
@@ -426,7 +468,10 @@ jobs:
             fi
             rmdir "$MOUNT_DIR"
           }
-          trap cleanup_dmg_mount EXIT HUP INT TERM
+          trap cleanup_dmg_mount EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
           hdiutil attach "$DMG" \
             -nobrowse \
             -readonly \
@@ -434,7 +479,9 @@ jobs:
           DMG_ATTACHED=true
           MOUNTED_APP="$MOUNT_DIR/Guru Terminal.app"
           test -d "$MOUNTED_APP"
-          apps/guruterminal/scripts/check-macos-app-bundle.sh "$MOUNTED_APP"
+          apps/guruterminal/scripts/check-macos-app-bundle.sh \
+            "$MOUNTED_APP" \
+            --expected-bundle-version "$GURUTERMINAL_MACOS_BUNDLE_VERSION"
           hdiutil detach "$MOUNT_DIR" >/dev/null
           DMG_ATTACHED=false
           rmdir "$MOUNT_DIR"
@@ -541,7 +588,7 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.GURUTERMINAL_WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.GURUTERMINAL_WINDOWS_CERTIFICATE_PASSWORD }}
           GURUTERMINAL_UPDATER_PUBLIC_KEY: ${{ secrets.GURUTERMINAL_UPDATER_PUBLIC_KEY }}
-          GURUTERMINAL_UPDATE_ENDPOINTS: ${{ needs.validate.outputs.update_endpoints }}
+          GURUTERMINAL_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           GURUTERMINAL_WINDOWS_TIMESTAMP_URL: https://timestamp.digicert.com
         run: |
           $pfxPath = Join-Path $env:RUNNER_TEMP "guruterminal-signing.pfx"
@@ -568,6 +615,7 @@ jobs:
           $releaseConfig = Join-Path $env:RUNNER_TEMP "guruterminal-tauri-release.json"
           & python apps/guruterminal/scripts/create-release-config.py `
             --platform windows `
+            --version $env:GURUTERMINAL_RELEASE_VERSION `
             --release-config apps/guruterminal/src-tauri/tauri.release.conf.json `
             --output $releaseConfig
           if ($LASTEXITCODE -ne 0) {
@@ -722,6 +770,7 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          GURUTERMINAL_MACOS_BUNDLE_VERSION: ${{ needs.validate.outputs.macos_bundle_version }}
         run: |
           set -euo pipefail
           python3 apps/guruterminal/scripts/finalize-release-assets.py \
@@ -730,6 +779,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --source-commit "${{ needs.validate.outputs.source_commit }}" \
             --workflow-run-id "$GITHUB_RUN_ID" \
+            --macos-bundle-version "$GURUTERMINAL_MACOS_BUNDLE_VERSION" \
             --assets release-assets
 
       - name: Validate assembled release

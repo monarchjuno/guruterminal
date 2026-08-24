@@ -145,14 +145,12 @@ fn repository_exposes_one_guruterminal_product() {
 fn korea_investment_catalog_is_read_only() {
     let marketplace = json("apps/guruterminal/marketplace/marketplace.json");
     assert_eq!(marketplace["schema_version"], "guruterminal-marketplace/1");
-    assert!(
-        marketplace["plugins"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|plugin| plugin["name"] == "koreainvestment"
-                && plugin["source"]["path"] == "./plugins/koreainvestment")
-    );
+    assert!(marketplace["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|plugin| plugin["name"] == "koreainvestment"
+            && plugin["source"]["path"] == "./plugins/koreainvestment"));
     let entry = json(
         "apps/guruterminal/marketplace/plugins/koreainvestment/connectors/koreainvestment.market-data.json",
     );

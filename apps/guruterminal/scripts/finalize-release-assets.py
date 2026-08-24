@@ -17,6 +17,7 @@ RELEASE_VERSION = re.compile(
 )
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+MACOS_BUNDLE_VERSION = re.compile(r"^[1-9][0-9]*$")
 
 
 def sha256(path: Path) -> str:
@@ -51,6 +52,7 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--workflow-run-id", required=True)
+    parser.add_argument("--macos-bundle-version", required=True)
     parser.add_argument("--assets", required=True, type=Path)
     arguments = parser.parse_args()
 
@@ -68,6 +70,10 @@ def main() -> int:
         or int(arguments.workflow_run_id) < 1
     ):
         raise RuntimeError("workflow run id must be a positive decimal integer")
+    if MACOS_BUNDLE_VERSION.fullmatch(arguments.macos_bundle_version) is None:
+        raise RuntimeError(
+            "macOS bundle version must be a positive decimal build counter"
+        )
     if not arguments.assets.is_dir() or arguments.assets.is_symlink():
         raise RuntimeError("release assets path must be a real directory")
 
@@ -91,12 +97,13 @@ def main() -> int:
         shutil.copyfile(arguments.assets / source, arguments.assets / alias)
 
     metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
         "repository": arguments.repository,
         "tag": arguments.tag,
         "version": arguments.version,
         "source_commit": arguments.source_commit,
         "workflow_run_id": arguments.workflow_run_id,
+        "macos_bundle_version": arguments.macos_bundle_version,
         "updater_manifest": "latest.json",
         "artifacts": {
             name: {"sha256": sha256(arguments.assets / name)} for name in canonical

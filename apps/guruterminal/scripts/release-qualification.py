@@ -16,6 +16,7 @@ RC_TAG = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.([1-9]\d*)$
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MACOS_BUNDLE_VERSION = re.compile(r"^[1-9][0-9]*$")
 
 
 def sha256(path: Path) -> str:
@@ -117,11 +118,13 @@ def validate_identity(
         raise RuntimeError("source commit must be a lowercase 40-digit SHA-1")
     positive_integer(release_id, "draft release id")
     if (
-        metadata.get("schema_version") != 1
+        metadata.get("schema_version") != 2
         or metadata.get("tag") != candidate_tag
         or metadata.get("version") != candidate_tag.removeprefix("v")
         or metadata.get("repository") != repository
         or metadata.get("source_commit") != source_commit
+        or not isinstance(metadata.get("macos_bundle_version"), str)
+        or MACOS_BUNDLE_VERSION.fullmatch(metadata["macos_bundle_version"]) is None
     ):
         raise RuntimeError("release metadata identity does not match qualification")
     return candidate_tag.removeprefix("v")

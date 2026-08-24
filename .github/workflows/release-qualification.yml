@@ -225,15 +225,45 @@ jobs:
           hdiutil verify "$DMG" >/dev/null
           codesign --verify --strict --verbose=2 "$DMG"
           xcrun stapler validate "$DMG"
+          MACOS_BUNDLE_VERSION="$(
+            python3 - candidate-assets/RELEASE-METADATA.json <<'PY'
+          import json
+          import re
+          import sys
+
+          metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+          bundle_version = metadata.get("macos_bundle_version")
+          if not isinstance(bundle_version, str) or re.fullmatch(r"[1-9][0-9]*", bundle_version) is None:
+              raise SystemExit("candidate metadata has no canonical macOS bundle version")
+          print(bundle_version)
+          PY
+          )"
           MOUNT_DIR="$(mktemp -d "$RUNNER_TEMP/guruterminal-candidate.XXXXXX")"
+          DMG_ATTACHED=false
+          cleanup_dmg_mount() {
+            if [[ "$DMG_ATTACHED" == true ]]; then
+              hdiutil detach "$MOUNT_DIR" >/dev/null || true
+            fi
+            rmdir "$MOUNT_DIR" >/dev/null 2>&1 || true
+          }
+          trap cleanup_dmg_mount EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
+          DMG_ATTACHED=true
           APP="$MOUNT_DIR/Guru Terminal.app"
           codesign --verify --deep --strict --verbose=2 "$APP"
           xcrun stapler validate "$APP"
-          test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
+          python3 apps/guruterminal/scripts/check-macos-bundle-version.py \
+            --tauri-config apps/guruterminal/src-tauri/tauri.conf.json \
+            --source-plist apps/guruterminal/src-tauri/Info.plist \
+            --expected-bundle-version "$MACOS_BUNDLE_VERSION" \
+            --bundle-plist "$APP/Contents/Info.plist"
           hdiutil detach "$MOUNT_DIR" >/dev/null
+          DMG_ATTACHED=false
           rmdir "$MOUNT_DIR"
-
+          trap - EXIT HUP INT TERM
       - name: Verify Windows Authenticode signature
         if: matrix.platform == 'windows'
         shell: pwsh
