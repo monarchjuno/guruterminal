@@ -153,10 +153,13 @@ cd apps/guruterminal/e2e
 GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat
 ```
 
-`test:live-chat` verifies Luna/max streaming, Work progress for compute /
-artifact / evidence / chart / decision, Memory `$wiki` and `$lens`
-teach-then-apply, Memory view titles, Stop, session compaction without error,
-a follow-up turn after the long sequence, and restart persistence.
+`test:live-chat` verifies a visible Luna/max streamed assistant delta, Finance
+Core capability discovery/load plus a deterministic percentage calculation,
+Work progress for compute / artifact / evidence / chart / decision, Memory
+`$wiki` and `$lens` teach-then-apply, and a restarted new Chat that semantically
+searches and exact-reads both records rather than relying on the prior
+transcript. It also covers Memory view titles, Stop, session compaction without
+error, a follow-up turn after the long sequence, and restart persistence.
 Deterministic Rust and native tests remain authoritative for Memory write
 integrity, Wiki/Lens policy enforcement, recovery, concurrency, and
 release-only boundaries.
