@@ -127,6 +127,8 @@ assert sys.version_info[:2] == (3, 12), sys.version
             python -m py_compile "$APP_ROOT"/scripts/*.py
     )
     uv run --project "$PYTHON_ROOT" --locked --no-sync \
+        python "$APP_ROOT/scripts/set-version.py" --check
+    uv run --project "$PYTHON_ROOT" --locked --no-sync \
         python -m unittest discover -s "$APP_ROOT/scripts" -p 'test_*.py'
     (
         cd "$PYTHON_ROOT"

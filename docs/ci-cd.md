@@ -26,7 +26,14 @@ Automatic updates exist only in signed macOS and Windows release builds.
 
 ## Release
 
-Version is SemVer. Tags are `vX.Y.Z` or `vX.Y.Z-rc.N` and must match Cargo, npm, lockfiles, and Tauri.
+Version is SemVer. Tags are `vX.Y.Z` or `vX.Y.Z-rc.N` and must match Cargo, npm, lockfiles, Tauri, and the base macOS plist version. Use the checked-in version helper rather than hand-editing those copies:
+
+```sh
+python3 apps/guruterminal/scripts/set-version.py --version X.Y.Z-rc.N
+python3 apps/guruterminal/scripts/set-version.py --check --version X.Y.Z-rc.N
+```
+
+The command rejects an already-diverged tree before writing any file, updates every authored version and lockfile copy together, and keeps `Info.plist` at the SemVer base version for RCs. Use `--dry-run` to review a transition first.
 
 Release runs use a non-cancelling serialized queue. `GITHUB_RUN_NUMBER` is a
 lower bound for the macOS `CFBundleVersion`, and the release workflow allocates
@@ -36,10 +43,11 @@ version; the separate build counter is recorded in `RELEASE-METADATA.json` and
 the qualification workflow compares it to the signed candidate DMG. This keeps
 an RC, a stable promotion, and a retried run from reusing a macOS build number.
 
-1. Publish a non-draft `vX.Y.Z-rc.N`.
+1. Set the product to `X.Y.Z-rc.N`, commit it, push it to `main`, and wait for the exact commit's CI run to pass. Create `vX.Y.Z-rc.N`; the workflow publishes that non-draft prerelease.
 2. On clean machines, complete the acceptance flow in `GURU_TERMINAL.md`: ordinary Chat writes justified Wiki or Lens, and a later relevant turn uses it. A Memory write that never changes later work does not qualify.
-3. Qualify the signed candidate (N-1 → N update on both platforms). Scripts: `verify-release-assets.py`, `serve-update-candidate.py`, `release-qualification.py`.
-4. Promote that existing draft with the `stable-release` workflow. Promotion does not build or upload files.
+3. After RC acceptance, set the product to `X.Y.Z`, replace the matching `CHANGELOG.md` `Unreleased` heading with its final ISO date, commit, push, and wait for that exact commit's CI run to pass. Create `vX.Y.Z`; its workflow requires the matching published RC and creates the stable **draft** candidate.
+4. Qualify that stable draft (matching RC → stable update on both platforms). Scripts: `verify-release-assets.py`, `serve-update-candidate.py`, `release-qualification.py`.
+5. Promote the qualified stable draft with the `stable-release` workflow. Promotion does not build or upload files.
 
 ## Candidate update qualification
 
