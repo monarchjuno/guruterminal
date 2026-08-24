@@ -42,7 +42,7 @@
     "publisher": "Guru Terminal",
     "homepage": "https://github.com/monarchjuno/guruterminal",
     "shortDescription": "Build an investment Guru that shows its work",
-    "longDescription": "Guru Terminal is a local-first research desktop for investors. Build a Guru that reads primary filings, runs its own valuation math, and keeps every source and judgment as plain Markdown on your machine. It runs on your own API key, with no account and no sync.",
+    "longDescription": "Guru Terminal is a local-first research desktop for investors. Build a Guru that reads primary filings, runs its own valuation math, and keeps every source and judgment as plain Markdown on your machine. It uses a supported provider API key or account sign-in, with no Guru Terminal account and no sync.",
     "macOS": {
       "bundleVersion": "1",
       "minimumSystemVersion": "13.0"

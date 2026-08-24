@@ -16,7 +16,7 @@ A self-improving investment agent: it turns source-grounded research into reusab
 
 Most investment assistants start over with every answer. A Guru does not. It is a second investment brain: it reads primary filings, runs the valuation math itself, challenges its prior views, and turns each piece of research into knowledge it uses again — in later companies, later markets, later decisions.
 
-Everything a Guru learns is plain Markdown in a folder you own. The app runs on your machine, on your own API key. There is no account, no sync, and no subscription that takes your Guru with it.
+Everything a Guru learns is plain Markdown in a folder you own. The app runs on your machine with a supported provider API key or account sign-in. There is no Guru Terminal account, no sync, and no subscription that takes your Guru with it.
 
 ## Teach it once, it stays taught
 

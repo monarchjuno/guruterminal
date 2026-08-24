@@ -18,7 +18,7 @@ Gurus are the unit a user builds, names, and — in a later release — shares. 
 
 ## Who this is for
 
-A serious individual investor who reads filings, wants primary sources rather than a vendor's summary, and wants an investment agent whose judgment develops instead of resetting with every conversation. Single user, one machine, own API key.
+A serious individual investor who reads filings, wants primary sources rather than a vendor's summary, and wants an investment agent whose judgment develops instead of resetting with every conversation. Single user, one machine, supported provider API key or account sign-in.
 
 ## Language and market
 
@@ -42,7 +42,7 @@ Copy may lead with any of these. All three are shipped behavior, not roadmap.
    FRED, keyless market data, and configured data vendors into the same chat as
    native OpenDART, World Bank, KRX, and the Korea Investment read catalog.
    Credentials stay on the device.
-3. **Files that outlive the app.** Memory is plain Markdown in a folder the user owns. The app runs locally on the user's own API key, with no account and no sync.
+3. **Files that outlive the app.** Memory is plain Markdown in a folder the user owns. The app runs locally with a supported provider API key or account sign-in, with no Guru Terminal account and no sync.
 
 ## Memory kinds in user-facing language
 

@@ -1,6 +1,6 @@
 # V1 acceptance
 
-Targets: macOS 13+ Apple Silicon and Windows x64. Local-first, single user, own API key. No account, no trades, no telemetry, no V1 MCP endpoint.
+Targets: macOS 13+ Apple Silicon and Windows x64. Local-first, single user, supported provider API key or account sign-in. No Guru Terminal account, no trades, no telemetry, no V1 MCP endpoint.
 
 A release is ready when a real user can do this on a clean signed install:
 

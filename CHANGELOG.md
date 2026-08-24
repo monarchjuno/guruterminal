@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.1 - Unreleased
+## 0.0.1 - 2026-08-25
 
 - Launch Guru Terminal as a single local-first desktop product for macOS Apple Silicon and Windows x64.
 - Add Wiki and Lens Skills that organize durable facts and set an original Decision against what actually happened.

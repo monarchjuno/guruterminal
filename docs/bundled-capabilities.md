@@ -74,3 +74,21 @@ The deterministic finance worker has no network access. Compute has no network,
 host filesystem, or Memory access. Korea Investment is read-only; orders are
 not in its inventory. Web search routing is a Marketplace setting rather than
 a model-selected provider.
+
+### Maintaining the Korea Investment read catalog
+
+`marketplace/kis-read-api-v1.json` is a checked-in, deterministic projection of
+the pinned `koreainvestment/open-trading-api` revision. It is not refreshed at
+runtime. When reviewing an upstream API update, use a clean checkout at the
+commit pinned in `scripts/generate-kis-read-api.py`, then first prove that the
+current file still matches:
+
+```sh
+python3 apps/guruterminal/scripts/generate-kis-read-api.py \
+  --source /absolute/path/to/open-trading-api --check
+```
+
+After an intentional, reviewed pin update, run the same command without
+`--check` and commit the generated catalog with its connector tests. The
+generator rejects a dirty or wrong upstream revision, every non-GET operation,
+and any unexpected change to the reviewed write/read inventory.
