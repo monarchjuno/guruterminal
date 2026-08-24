@@ -37,6 +37,8 @@ const lineageToken = "NATIVE-LINEAGE-E2E-COMPLETE";
 const followupToken = "LUNA-NATIVE-E2E-FOLLOWUP";
 const financeResultToken = "LUNA-FINANCE-CORE-25-PERCENT-E2E";
 const worldBankResultToken = "LUNA-WORLD-BANK-MACRO-E2E";
+const openbbResultToken = "LUNA-OPENBB-KEYLESS-E2E";
+const openbbEvidenceTitle = "OpenBB keyless AAPL quote receipt";
 const webResearchResultToken = "LUNA-WEB-RESEARCH-E2E";
 const restartedMemoryToken = "LUNA-RESTARTED-MEMORY-E2E";
 const wikiTitle = "WP4 cobalt-foil spare-capacity rule";
@@ -45,6 +47,7 @@ const acceptanceObservations = {
   streamedAssistantDelta: null,
   financeCore: null,
   worldBankMacro: null,
+  openbbKeyless: null,
   webResearch: null,
   restartedMemoryReuse: null,
 };
@@ -643,6 +646,190 @@ async function runWorldBankMacroTurn() {
   await screenshot("world-bank-macro");
 }
 
+async function runOpenbbKeylessTurn() {
+  await setComposerCheckbox("Use memory", false);
+  await setComposerCheckbox("Update memory", false);
+
+  const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  await sendPrompt(
+    `Native acceptance test. Do not read or search Memory, web, compute, or artifacts, and do not use any connector other than the named OpenBB component. Follow this exact sequence: first call capability_load exactly once with id "mcp/openbb"; then call mcp__openbb__activate_tools exactly once with tool_names ["equity_price_quote"]; then call mcp__openbb__equity_price_quote exactly once with symbol "AAPL" and provider "yfinance"; then use that quote response's exact result_ref to call evidence_create exactly once with title "${openbbEvidenceTitle}", summary "Receipt for the keyless OpenBB AAPL quote.", as_of "2026-08-24", and one claim whose text says the selected provider was yfinance and whose sole citation uses that result_ref at JSON Pointer "/structuredContent/provider". Do not call any other tool. After all four tools succeed, reply exactly: ${openbbResultToken}: <the exact quote result_ref>`,
+  );
+  await displayed('button[aria-label="Stop response"]', 15_000);
+  await displayed('[aria-label="Work progress"]', 60_000);
+
+  const assistant = await latestCompleteAssistant(
+    previousComplete,
+    240_000,
+    "openbb-keyless",
+  );
+  const response = await assistant.$(".message-content");
+  assert.ok(
+    await response.isExisting(),
+    "openbb-keyless: assistant response body is missing",
+  );
+  const assistantText = (await response.getText()).replace(/\s+/gu, " ").trim();
+  const resultRefMatch = assistantText.match(
+    new RegExp(`^${openbbResultToken}: (result:[A-Za-z0-9_-]{1,128})$`),
+  );
+  assert.ok(
+    resultRefMatch,
+    `openbb-keyless: assistant did not return exactly one delivered quote result_ref: ${assistantText}`,
+  );
+  const [, resultRef] = resultRefMatch;
+  observeToken(openbbResultToken);
+  observeToken(resultRef);
+  await waitForText(assistant, "Sources saved", 30_000);
+  const evidenceSummary = await assistant.$("details.memory-update-footer.applied > summary");
+  assert.ok(
+    await evidenceSummary.isExisting(),
+    "openbb-keyless: delivered quote receipt was not finalized as Evidence",
+  );
+  if ((await evidenceSummary.getAttribute("aria-expanded")) !== "true") {
+    await evidenceSummary.click();
+  }
+  await waitForText(assistant, openbbEvidenceTitle, 30_000);
+
+  const rows = await latestProgressRows("openbb-keyless");
+  const nonSystemRows = rows.filter((row) => row.category !== "system");
+  assert.equal(
+    nonSystemRows.length,
+    4,
+    `openbb-keyless: unexpected non-system Work progress rows: ${JSON.stringify(nonSystemRows)}`,
+  );
+  exactlyOneSucceededProgressRow(
+    nonSystemRows,
+    {
+      category: "capability",
+      operation: "read",
+      action: "Opened a tool",
+      target: "mcp/openbb",
+    },
+    "openbb-keyless",
+  );
+  exactlyOneSucceededProgressRow(
+    nonSystemRows,
+    {
+      category: "memory",
+      operation: "publish",
+      action: "Created evidence",
+      target: openbbEvidenceTitle,
+    },
+    "openbb-keyless",
+  );
+  const marketRows = nonSystemRows.filter(
+    (row) =>
+      row.category === "finance" &&
+      row.operation === "read" &&
+      row.action === "Read market data",
+  );
+  assert.equal(
+    marketRows.length,
+    2,
+    `openbb-keyless: expected activation and quote Work progress rows, got ${JSON.stringify(marketRows)}`,
+  );
+  const activationRows = marketRows.filter((row) => row.target === null);
+  assert.equal(
+    activationRows.length,
+    1,
+    `openbb-keyless: expected one OpenBB activation row, got ${JSON.stringify(marketRows)}`,
+  );
+  assert.equal(
+    activationRows[0].status,
+    "succeeded",
+    `openbb-keyless: OpenBB activation failed: ${JSON.stringify(activationRows[0])}`,
+  );
+  const quoteRows = marketRows.filter((row) => row.target === "AAPL · yfinance");
+  assert.equal(
+    quoteRows.length,
+    1,
+    `openbb-keyless: expected one AAPL/yfinance quote row, got ${JSON.stringify(marketRows)}`,
+  );
+  assert.equal(
+    quoteRows[0].status,
+    "succeeded",
+    `openbb-keyless: OpenBB AAPL quote failed: ${JSON.stringify(quoteRows[0])}`,
+  );
+  await waitUntilIdle();
+  await assertTurnHealthy("openbb-keyless");
+  const citation = await readOpenbbEvidenceCitation(resultRef);
+  acceptanceObservations.openbbKeyless = {
+    component: "mcp/openbb",
+    activationTool: "mcp__openbb__activate_tools",
+    quoteTool: "mcp__openbb__equity_price_quote",
+    provider: "yfinance",
+    symbol: "AAPL",
+    resultRef,
+    evidenceTitle: openbbEvidenceTitle,
+    evidenceCitation: citation,
+  };
+
+  await setComposerCheckbox("Use memory", true);
+  await setComposerCheckbox("Update memory", true);
+  await screenshot("openbb-keyless");
+}
+
+async function readOpenbbEvidenceCitation(resultRef) {
+  await dismissOverlays();
+  await clickButton("Memory");
+  const library = await displayed("#main-panel-library");
+  const search = await displayed('input[placeholder="Search memory"]');
+  await search.setValue(openbbEvidenceTitle);
+
+  const matchingResults = async () => {
+    const matches = [];
+    for (const button of await library.$$("button[data-library-result]")) {
+      if (!(await isVisible(button))) continue;
+      if ((await button.getAttribute("data-kind")) !== "evidence") continue;
+      const label = await button.getAttribute("aria-label");
+      if (label?.startsWith(`Open ${openbbEvidenceTitle} (Evidence,`)) {
+        matches.push(button);
+      }
+    }
+    return matches;
+  };
+  await browser.waitUntil(
+    async () => (await matchingResults()).length === 1,
+    {
+      timeout: 30_000,
+      interval: 150,
+      timeoutMsg: `openbb-keyless: stored Evidence did not appear as one exact visible result\n${await bodyText()}`,
+    },
+  );
+  const [evidenceResult] = await matchingResults();
+  assert.ok(evidenceResult, "openbb-keyless: stored Evidence search result disappeared");
+  await evidenceResult.click();
+  await waitForText(library, openbbEvidenceTitle, 30_000);
+  await clickButton("Raw", library);
+
+  const raw = await displayed("pre.raw-markdown", 30_000);
+  const markdown = (await raw.getText()).replace(/\r\n?/gu, "\n");
+  const citations = [
+    ...markdown.matchAll(
+      /^## Claim \d+ · Citation \d+\n\n- Result: `([^`\n]+)`\n- JSON Pointer: `([^`\n]+)`\n- Selection: (?:exact value|exact excerpt)$/gmu,
+    ),
+  ];
+  assert.equal(
+    citations.length,
+    1,
+    `openbb-keyless: stored Evidence must contain one citation, got ${citations.length}`,
+  );
+  const [, storedResultRef, pointer] = citations[0];
+  assert.equal(
+    storedResultRef,
+    resultRef,
+    "openbb-keyless: stored Evidence citation must retain the OpenBB quote result_ref",
+  );
+  assert.equal(
+    pointer,
+    "/structuredContent/provider",
+    "openbb-keyless: stored Evidence citation must select the OpenBB provider pointer",
+  );
+
+  await clickButton("Chat");
+  await displayed('textarea[aria-label="Message Guru"]');
+  return { resultRef: storedResultRef, pointer };
+}
+
 async function runWebResearchTurn() {
   await setComposerCheckbox("Use memory", false);
   await setComposerCheckbox("Update memory", false);
@@ -1120,6 +1307,7 @@ try {
     await runCompletedTurn();
     await runFinanceCoreTurn();
     await runWorldBankMacroTurn();
+    await runOpenbbKeylessTurn();
     await runWebResearchTurn();
     await runArtifactTurn();
     await runEvidenceChartDecisionTurn();

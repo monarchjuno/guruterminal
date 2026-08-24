@@ -156,8 +156,11 @@ GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test
 `test:live-chat` verifies a visible Luna/max streamed assistant delta, Finance
 Core capability discovery/load plus a deterministic percentage calculation, the
 default World Bank macro-data component through its native public API, and the
-Web Research component through public search plus a fixed public fetch. It also
-verifies Work progress for compute / artifact / evidence / chart / decision,
+default keyless OpenBB component through its dynamic MCP activation, an AAPL
+quote from yfinance, and a stored Evidence citation whose result receipt and
+JSON Pointer are read back through Memory. It also verifies the Web Research
+component through public search plus a fixed public fetch, Work progress for
+compute / artifact / evidence / chart / decision,
 Memory `$wiki` and `$lens` teach-then-apply, and a restarted new Chat that
 semantically searches and exact-reads both records rather than relying on the
 prior transcript. It covers Memory view titles, Stop, session compaction without
