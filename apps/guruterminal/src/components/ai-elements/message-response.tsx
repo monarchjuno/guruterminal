@@ -3,7 +3,7 @@ import { parseCredentialFreeHttpUrl } from "@/lib/credentialFreeUrl";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import type { DiagramPlugin } from "@streamdown/mermaid";
 import { ExternalLinkIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { memo, useMemo, useState } from "react";
@@ -83,11 +83,15 @@ function GuruTerminalMarkdownLink({
   );
 }
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+export type MessageResponseProps = Omit<
+  ComponentProps<typeof Streamdown>,
+  "plugins"
+> & {
   onOpenLink?: (url: string) => Promise<void> | void;
+  mermaidPlugin?: DiagramPlugin;
 };
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const baseStreamdownPlugins = { cjk, code, math };
 const disabledLinkSafety = { enabled: false } as const;
 
 export const MessageResponse = memo(
@@ -97,6 +101,7 @@ export const MessageResponse = memo(
     children,
     linkSafety,
     onOpenLink,
+    mermaidPlugin,
     ...props
   }: MessageResponseProps) => {
     const resolvedComponents = useMemo(
@@ -113,6 +118,13 @@ export const MessageResponse = memo(
             }
           : components,
       [components, onOpenLink],
+    );
+    const streamdownPlugins = useMemo(
+      () =>
+        mermaidPlugin
+          ? { ...baseStreamdownPlugins, mermaid: mermaidPlugin }
+          : baseStreamdownPlugins,
+      [mermaidPlugin],
     );
 
     return (
