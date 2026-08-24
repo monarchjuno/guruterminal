@@ -28,13 +28,17 @@ def configured_rulesets() -> list[dict[str, object]]:
             "target": "branch",
             "enforcement": "active",
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
-            "rules": [{"type": "required_status_checks"}],
+            "rules": [{"type": "pull_request"}],
         },
         {
             "target": "tag",
             "enforcement": "active",
             "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
-            "rules": [{"type": "creation"}],
+            "rules": [
+                {"type": "creation"},
+                {"type": "update"},
+                {"type": "deletion"},
+            ],
         },
     ]
 
@@ -73,7 +77,7 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                 "default_branch": "main",
             },
             "rulesets": configured_rulesets(),
-            "main_has_legacy_protection": False,
+            "main_legacy_protection": None,
             "immutable_releases": {"enabled": True, "enforced_by_owner": False},
             "environments": configured_environments(),
         }
@@ -123,20 +127,20 @@ class GitHubReleaseSetupTest(unittest.TestCase):
         errors = {finding.subject for finding in findings if finding.level == "error"}
         self.assertIn("immutable releases", errors)
 
-    def test_disabled_or_empty_rulesets_do_not_count_as_protection(self) -> None:
+    def test_disabled_or_incomplete_rulesets_do_not_count_as_protection(self) -> None:
         findings = self.audit(
             rulesets=[
                 {
                     "target": "branch",
                     "enforcement": "disabled",
                     "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
-                    "rules": [{"type": "required_status_checks"}],
+                    "rules": [{"type": "pull_request"}],
                 },
                 {
                     "target": "tag",
                     "enforcement": "active",
                     "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
-                    "rules": [],
+                    "rules": [{"type": "creation"}],
                 },
             ]
         )
@@ -145,6 +149,23 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             errors & {"main protection", "release tags"},
             {"main protection", "release tags"},
         )
+
+    def test_legacy_main_protection_must_require_a_pull_request(self) -> None:
+        rulesets = configured_rulesets()[1:]
+        findings = self.audit(
+            rulesets=rulesets,
+            main_legacy_protection={
+                "required_pull_request_reviews": {"required_approving_review_count": 1}
+            },
+        )
+        self.assertNotIn("error", [finding.level for finding in findings])
+
+        findings = self.audit(
+            rulesets=rulesets,
+            main_legacy_protection={"required_status_checks": {"strict": True}},
+        )
+        errors = {finding.subject for finding in findings if finding.level == "error"}
+        self.assertIn("main protection", errors)
 
     def test_branch_policy_counts_as_environment_protection(self) -> None:
         environments = configured_environments()

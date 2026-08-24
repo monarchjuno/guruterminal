@@ -6,17 +6,18 @@ This page is the release procedure. Product behavior is not defined here. Workfl
 
 ## GitHub
 
-Protect `main` and `v*` tags. Protect the `release`, `release-qualification`, and `stable-release` environments. Signing secrets live only in `release`. `stable-release` must require at least one reviewer and prevent self-review, so the person who dispatches promotion cannot approve it. Enable immutable GitHub Releases.
+Require pull requests for `main`. Restrict `v*` tag creation, update, and deletion. Protect the `release`, `release-qualification`, and `stable-release` environments. Signing secrets live only in `release`. `stable-release` must require at least one reviewer and prevent self-review, so the person who dispatches promotion cannot approve it. Enable immutable GitHub Releases.
 
-Before the first RC, run the checked-in, read-only audit from an authenticated
-GitHub CLI session:
+Before every RC tag and stable promotion, run the checked-in, read-only audit
+from an authenticated GitHub CLI session:
 
 ```sh
 python3 apps/guruterminal/scripts/check-github-release-setup.py
 ```
 
 It verifies the public repository identity, immutable releases, `main`
-protection, an active `v*` tag rule, each required protected environment, and the **names** of every
+pull-request protection, an active `v*` tag rule that restricts creation,
+updates, and deletion, each required protected environment, and the **names** of every
 secret referenced by `release.yml`. It never prints or reads secret values and
 does not change GitHub state. A nonzero result names every missing item. The
 auditor intentionally derives the required release-secret names from the

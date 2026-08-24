@@ -26,6 +26,8 @@ EXPECTED_DEFAULT_BRANCH = "main"
 REQUIRED_ENVIRONMENTS = ("release", "release-qualification", "stable-release")
 REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
+MAIN_BRANCH_RULE_TYPES = frozenset(("pull_request",))
+RELEASE_TAG_RULE_TYPES = frozenset(("creation", "update", "deletion"))
 
 
 class AuditError(RuntimeError):
@@ -70,18 +72,32 @@ def matches_ref_pattern(pattern: str, ref: str, default_ref: str) -> bool:
     return fnmatchcase(ref, pattern)
 
 
+def has_required_rule_types(value: object, required_types: frozenset[str]) -> bool:
+    if not isinstance(value, list):
+        return False
+    types: set[str] = set()
+    for rule in value:
+        if not isinstance(rule, dict):
+            return False
+        rule_type = rule.get("type")
+        if not isinstance(rule_type, str) or not rule_type:
+            return False
+        types.add(rule_type)
+    return required_types <= types
+
+
 def active_ruleset_protects(
     ruleset: object,
     *,
     target: str,
     ref: str,
     default_ref: str,
+    required_rule_types: frozenset[str],
 ) -> bool:
     value = require_object(ruleset, "repository ruleset")
     if value.get("target") != target or value.get("enforcement") != "active":
         return False
-    rules = value.get("rules")
-    if not isinstance(rules, list) or not rules:
+    if not has_required_rule_types(value.get("rules"), required_rule_types):
         return False
     conditions = value.get("conditions")
     if not isinstance(conditions, dict):
@@ -107,6 +123,7 @@ def any_ruleset_protects(
     target: str,
     ref: str,
     default_ref: str,
+    required_rule_types: frozenset[str],
 ) -> bool:
     if not isinstance(rulesets, list):
         raise AuditError("repository rulesets response must be a JSON array")
@@ -116,6 +133,7 @@ def any_ruleset_protects(
             target=target,
             ref=ref,
             default_ref=default_ref,
+            required_rule_types=required_rule_types,
         )
         for ruleset in rulesets
     )
@@ -172,6 +190,13 @@ def immutable_releases_are_enabled(value: object | None) -> bool:
     )
 
 
+def legacy_main_has_pull_request_protection(value: object | None) -> bool:
+    if value is None:
+        return False
+    protection = require_object(value, "main branch protection response")
+    return isinstance(protection.get("required_pull_request_reviews"), dict)
+
+
 def environment_secret_names(value: object) -> set[str]:
     payload = require_object(value, "environment secrets response")
     secrets = payload.get("secrets")
@@ -194,7 +219,7 @@ def audit_release_setup(
     required_secrets: set[str],
     repository_data: object,
     rulesets: object,
-    main_has_legacy_protection: bool,
+    main_legacy_protection: object | None,
     immutable_releases: object | None,
     environments: object,
 ) -> list[Finding]:
@@ -237,19 +262,26 @@ def audit_release_setup(
     else:
         add("error", "immutable releases", "enable immutable GitHub Releases")
 
-    main_protected = main_has_legacy_protection or any_ruleset_protects(
+    main_protected = legacy_main_has_pull_request_protection(
+        main_legacy_protection
+    ) or any_ruleset_protects(
         rulesets,
         target="branch",
         ref=default_ref,
         default_ref=default_ref,
+        required_rule_types=MAIN_BRANCH_RULE_TYPES,
     )
     if main_protected:
-        add("pass", "main protection", "an active branch protection or ruleset applies")
+        add(
+            "pass",
+            "main protection",
+            "a pull-request branch protection or active ruleset applies",
+        )
     else:
         add(
             "error",
             "main protection",
-            "protect main with a branch protection or active ruleset",
+            "require pull requests for main with a branch protection or active ruleset",
         )
 
     tag_protected = any_ruleset_protects(
@@ -257,11 +289,20 @@ def audit_release_setup(
         target="tag",
         ref="refs/tags/v0.0.1",
         default_ref=default_ref,
+        required_rule_types=RELEASE_TAG_RULE_TYPES,
     )
     if tag_protected:
-        add("pass", "release tags", "an active tag ruleset covers v* tags")
+        add(
+            "pass",
+            "release tags",
+            "an active tag ruleset restricts v* creation, update, and deletion",
+        )
     else:
-        add("error", "release tags", "protect v* tags with an active tag ruleset")
+        add(
+            "error",
+            "release tags",
+            "restrict v* creation, update, and deletion with an active tag ruleset",
+        )
 
     configured_environments = environments_by_name(environments)
     for name in REQUIRED_ENVIRONMENTS:
@@ -355,7 +396,7 @@ def remote_audit(repository: str, workflow: Path, gh: str) -> list[Finding]:
         required_secrets=required_secrets,
         repository_data=repository_data,
         rulesets=rulesets,
-        main_has_legacy_protection=main_protection is not None,
+        main_legacy_protection=main_protection,
         immutable_releases=immutable_releases,
         environments=environments,
     )
