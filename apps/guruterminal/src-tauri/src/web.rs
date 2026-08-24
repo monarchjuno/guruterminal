@@ -1878,7 +1878,8 @@ mod tests {
             None,
         );
         let output = fetch(&source).await.unwrap().page(0).unwrap();
-        assert!(output.content.contains("Example Domain"));
+        assert_eq!(output.title, "Example Domain");
+        assert!(!output.content.trim().is_empty());
         assert_eq!(output.document_kind, "html");
         assert_eq!(output.extraction_method, "readability");
         assert!(output.untrusted_content);
