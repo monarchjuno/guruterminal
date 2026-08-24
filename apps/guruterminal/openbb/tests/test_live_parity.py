@@ -137,7 +137,7 @@ def test_deterministic_summary_removes_live_values_but_keeps_failure_evidence() 
             "inventory": {"providerless": {"unknown": []}},
             "capabilities": [
                 {
-                    "capability": "sustainability_esg",
+                    "capability": "credentialed_only_probe",
                     "status": "failed",
                     "facets": [
                         {

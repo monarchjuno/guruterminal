@@ -289,8 +289,8 @@ _CAPABILITIES = (
         ),
     ),
     Capability(
-        "sustainability_esg",
-        "Retrieve available ESG metrics without overstating provider coverage.",
+        "governance_risk_metrics",
+        "Retrieve the governance-risk metrics available from a keyless provider.",
         (
             Facet(
                 "governance_risk",
@@ -305,22 +305,6 @@ _CAPABILITIES = (
                         "board_risk",
                         "compensation_risk",
                         "shareholder_rights_risk",
-                    }
-                ),
-            ),
-            Facet(
-                "environmental_social_scores",
-                (("environmental score",), ("social score",)),
-                frozenset({"symbol"}),
-                _arguments(symbol="AAPL"),
-                (),
-                frozenset(
-                    {
-                        "esg_score",
-                        "environmental_score",
-                        "social_score",
-                        "governance_score",
-                        "total_esg",
                     }
                 ),
             ),
