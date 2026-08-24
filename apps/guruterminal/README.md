@@ -1,4 +1,10 @@
+<div align="center">
+
+<img src="assets/chimp-icon.png" alt="Guru Terminal" width="96" />
+
 # Guru Terminal Desktop
+
+</div>
 
 This directory contains the Guru Terminal React and Tauri desktop product, its bounded agent resources, read-only finance worker, isolated Deno/Pyodide compute worker, native E2E harness, app-local locks, and release packaging.
 
