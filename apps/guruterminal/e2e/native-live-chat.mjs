@@ -35,8 +35,15 @@ const lineageEvidenceTitle = "Native Lineage Evidence";
 const lineageDecisionTitle = "The deterministic lineage flow completed.";
 const lineageToken = "NATIVE-LINEAGE-E2E-COMPLETE";
 const followupToken = "LUNA-NATIVE-E2E-FOLLOWUP";
+const financeResultToken = "LUNA-FINANCE-CORE-25-PERCENT-E2E";
+const restartedMemoryToken = "LUNA-RESTARTED-MEMORY-E2E";
 const wikiTitle = "WP4 cobalt-foil spare-capacity rule";
 const lensTitle = "WP4 native-e2e capital-cycle lens";
+const acceptanceObservations = {
+  streamedAssistantDelta: null,
+  financeCore: null,
+  restartedMemoryReuse: null,
+};
 
 const {
   bodyText,
@@ -266,6 +273,43 @@ async function sendPrompt(text) {
   await (await displayed('button[aria-label="Send"]')).click();
 }
 
+async function assertVisibleStreamedAssistantDelta(caseName, timeout = 60_000) {
+  await browser.waitUntil(
+    async () => {
+      for (const article of await browser.$$(
+        "article.message.assistant.streaming",
+      )) {
+        if (!(await isVisible(article))) continue;
+        try {
+          const content = await article.$(".message-content");
+          if (!(await content.isExisting()) || !(await isVisible(content))) continue;
+          const text = (await content.getText()).replace(/\s+/gu, " ").trim();
+          if (!text || /^Starting response…?$/u.test(text)) continue;
+          acceptanceObservations.streamedAssistantDelta = {
+            caseName,
+            visible: true,
+            characters: text.length,
+          };
+          return true;
+        } catch {
+          // The streaming card may be replaced while React receives another delta.
+        }
+      }
+      return false;
+    },
+    {
+      timeout,
+      interval: 150,
+      timeoutMsg: `Timed out waiting for a visible nonempty streamed assistant delta (${caseName})\n${await bodyText()}`,
+    },
+  );
+  assert.equal(
+    acceptanceObservations.streamedAssistantDelta?.visible,
+    true,
+    `${caseName}: streamed assistant delta was not observed`,
+  );
+}
+
 async function waitUntilIdle(timeout = 30_000) {
   await browser.waitUntil(
     async () => {
@@ -319,6 +363,40 @@ async function assertTurnHealthy(caseName) {
   return progress;
 }
 
+async function latestProgressRows(caseName) {
+  const [latest] = await collectWorkProgress(browser, { latestOnly: true });
+  assert.ok(latest, `${caseName}: latest assistant response omitted Work progress`);
+  assert.ok(Array.isArray(latest.rows), `${caseName}: Work progress rows are invalid`);
+  return latest.rows;
+}
+
+function exactlyOneSucceededProgressRow(rows, expected, caseName) {
+  const matches = rows.filter(
+    (row) =>
+      row.category === expected.category &&
+      row.operation === expected.operation &&
+      row.action === expected.action,
+  );
+  assert.equal(
+    matches.length,
+    1,
+    `${caseName}: expected exactly one ${expected.action} row, got ${JSON.stringify(matches)}`,
+  );
+  assert.equal(
+    matches[0].status,
+    "succeeded",
+    `${caseName}: ${expected.action} did not succeed: ${JSON.stringify(matches[0])}`,
+  );
+  if (expected.target != null) {
+    assert.equal(
+      matches[0].target,
+      expected.target,
+      `${caseName}: ${expected.action} targeted the wrong component: ${JSON.stringify(matches[0])}`,
+    );
+  }
+  return matches[0];
+}
+
 const observedTokens = [];
 
 function observeToken(token) {
@@ -342,6 +420,7 @@ async function persistWorkProgress(label, extra = {}) {
     phase,
     compaction,
     observedTokens,
+    acceptanceObservations,
     missingHarnessActions: missingHarnessActions(progress),
     progress,
     ...extra,
@@ -411,9 +490,10 @@ async function runCompletedTurn() {
 
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
   await sendPrompt(
-    "For a native end-to-end test, reply with exactly this token and nothing else: LUNA-NATIVE-E2E-COMPLETE",
+    "For a native end-to-end streaming test, write exactly eight short numbered lines explaining why a UI must render a response progressively. Do not call any tool. End the eighth line with this exact token: LUNA-NATIVE-E2E-COMPLETE",
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
+  await assertVisibleStreamedAssistantDelta("complete-token");
   await screenshot("streaming");
 
   const assistant = await latestCompleteAssistant(previousComplete, 180_000, "complete-token");
@@ -423,6 +503,75 @@ async function runCompletedTurn() {
   await waitForText(assistant, "max", 15_000);
   await waitUntilIdle();
   await assertTurnHealthy("complete-token");
+}
+
+async function runFinanceCoreTurn() {
+  await setComposerCheckbox("Use memory", false);
+  await setComposerCheckbox("Update memory", false);
+
+  const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  await sendPrompt(
+    "Native acceptance test. Do not use Memory, web, compute, or any connector. Follow this exact sequence: first call capability_search exactly once with query \"finance calculations\"; then, from its result, call capability_load exactly once for the Finance calculations component; then call finance_calculate exactly once with operation \"percentage_change\" and arguments start \"80\", end \"100\", and precision 2. Do not call any other tool. After all three tools succeed, reply exactly: LUNA-FINANCE-CORE-25-PERCENT-E2E: 25 percent",
+  );
+  await displayed('button[aria-label="Stop response"]', 15_000);
+  await displayed('[aria-label="Work progress"]', 60_000);
+
+  const assistant = await latestCompleteAssistant(previousComplete, 180_000, "finance-core");
+  await waitForText(assistant, financeResultToken, 30_000);
+  assert.match(
+    (await assistant.getText()).replace(/\s+/gu, " "),
+    /\b25(?:\.0+)?\s*(?:percent\b|%)/iu,
+    "finance-core: the deterministic percentage result was not visible in the assistant answer",
+  );
+  observeToken(financeResultToken);
+
+  const rows = await latestProgressRows("finance-core");
+  const searched = exactlyOneSucceededProgressRow(
+    rows,
+    {
+      category: "capability",
+      operation: "search",
+      action: "Searched tools",
+    },
+    "finance-core",
+  );
+  assert.match(
+    searched.target ?? "",
+    /finance/i,
+    `finance-core: capability discovery query was not finance-specific: ${JSON.stringify(searched)}`,
+  );
+  exactlyOneSucceededProgressRow(
+    rows,
+    {
+      category: "capability",
+      operation: "read",
+      action: "Opened a tool",
+      target: "guruterminal.finance-core/calculations",
+    },
+    "finance-core",
+  );
+  exactlyOneSucceededProgressRow(
+    rows,
+    {
+      category: "finance",
+      operation: "calculate",
+      action: "Calculated financial data",
+      target: "percentage_change",
+    },
+    "finance-core",
+  );
+  acceptanceObservations.financeCore = {
+    calculation: "percentage_change",
+    visibleResult: "25 percent",
+    capabilityDiscovery: true,
+    capabilityLoad: true,
+  };
+
+  await waitUntilIdle();
+  await assertTurnHealthy("finance-core");
+  await setComposerCheckbox("Use memory", true);
+  await setComposerCheckbox("Update memory", true);
+  await screenshot("finance-core");
 }
 
 async function runArtifactTurn() {
@@ -731,7 +880,6 @@ async function verifyRestartedChat() {
   if (failedCompact.length) {
     throw new Error(`verify: compact row failed: ${JSON.stringify(failedCompact)}`);
   }
-  await persistWorkProgress("verify");
 
   await dismissOverlays();
   await clickButton("Memory");
@@ -742,6 +890,100 @@ async function verifyRestartedChat() {
   }
 }
 
+async function runRestartedMemoryReuseTurn() {
+  await dismissOverlays();
+  await clickButton("Chat");
+  await (
+    await displayed('button[aria-label="New session for Luna Native Agent"]')
+  ).click();
+
+  const main = await displayed("main");
+  await waitForText(main, "New chat", 15_000);
+  await waitForText(main, "Ask Luna Native Agent", 15_000);
+  await browser.waitUntil(
+    async () => (await browser.$$("article.message")).length === 0,
+    {
+      timeout: 15_000,
+      interval: 150,
+      timeoutMsg: `Restarted Memory reuse did not begin from a new empty Chat\n${await bodyText()}`,
+    },
+  );
+  await chooseLunaMax();
+  await setComposerCheckbox("Use memory", true);
+  await setComposerCheckbox("Update memory", false);
+
+  const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  await sendPrompt(
+    `This is a new Chat with no earlier transcript to rely on. Use only Memory tools. First call memory_search exactly once to find the durable guidance relevant to a customer with committed in-house packaging and a semiconductor equipment vendor entering a capacity-addition cycle while margins are rising. From its results, exact-read both relevant Wiki and Lens records with memory_read. Do not use any other tool. Then apply both records in a concise answer, cite both stored titles, and end with exactly ${restartedMemoryToken}.`,
+  );
+  await displayed('button[aria-label="Stop response"]', 15_000);
+  await displayed('[aria-label="Work progress"]', 60_000);
+
+  const assistant = await latestCompleteAssistant(
+    previousComplete,
+    240_000,
+    "restart-memory-reuse",
+  );
+  for (const title of [wikiTitle, lensTitle]) {
+    await waitForText(assistant, title, 30_000);
+    const used = await assistant.$(`button[aria-label="Used note: ${title}"]`);
+    assert.ok(
+      (await used.isExisting()) && (await isVisible(used)),
+      `restart-memory-reuse: exact Memory read was not visibly attributed to ${title}`,
+    );
+  }
+  await waitForText(assistant, restartedMemoryToken, 30_000);
+  observeToken(restartedMemoryToken);
+
+  const rows = await latestProgressRows("restart-memory-reuse");
+  const searches = rows.filter(
+    (row) =>
+      row.category === "memory" &&
+      row.operation === "search" &&
+      row.action === "Searched Memory",
+  );
+  assert.equal(
+    searches.length,
+    1,
+    `restart-memory-reuse: expected one semantic Memory search, got ${JSON.stringify(searches)}`,
+  );
+  assert.equal(
+    searches[0].status,
+    "succeeded",
+    `restart-memory-reuse: Memory search failed: ${JSON.stringify(searches[0])}`,
+  );
+  const reads = rows.filter(
+    (row) =>
+      row.category === "memory" &&
+      row.operation === "read" &&
+      row.action === "Read Memory",
+  );
+  assert.ok(
+    reads.length >= 2,
+    `restart-memory-reuse: expected exact reads for Wiki and Lens, got ${JSON.stringify(reads)}`,
+  );
+  assert.ok(
+    reads.every((row) => row.status === "succeeded"),
+    `restart-memory-reuse: Memory read failed: ${JSON.stringify(reads)}`,
+  );
+  const nonMemoryRows = rows.filter((row) => row.category !== "memory");
+  assert.deepEqual(
+    nonMemoryRows,
+    [],
+    `restart-memory-reuse: new Chat used non-Memory tools: ${JSON.stringify(nonMemoryRows)}`,
+  );
+  acceptanceObservations.restartedMemoryReuse = {
+    newSession: true,
+    semanticSearch: true,
+    exactReads: reads.length,
+    citedTitles: [wikiTitle, lensTitle],
+  };
+
+  await waitUntilIdle();
+  await assertTurnHealthy("restart-memory-reuse");
+  await screenshot("restart-memory-reuse");
+}
+
 try {
   if (phase === "run") {
     await createLiveAgent();
@@ -750,6 +992,7 @@ try {
     await (await displayed('button[aria-label="New session for Luna Native Agent"]')).click();
     await chooseLunaMax();
     await runCompletedTurn();
+    await runFinanceCoreTurn();
     await runArtifactTurn();
     await runEvidenceChartDecisionTurn();
     await runLearnThenCiteTurns();
@@ -769,6 +1012,8 @@ try {
   } else {
     await verifyRestartedChat();
     await screenshot("restarted");
+    await runRestartedMemoryReuseTurn();
+    await persistWorkProgress("verify");
     console.log("Native Luna max Chat restart passed.");
   }
 } catch (error) {
