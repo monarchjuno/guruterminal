@@ -36,12 +36,16 @@ const lineageDecisionTitle = "The deterministic lineage flow completed.";
 const lineageToken = "NATIVE-LINEAGE-E2E-COMPLETE";
 const followupToken = "LUNA-NATIVE-E2E-FOLLOWUP";
 const financeResultToken = "LUNA-FINANCE-CORE-25-PERCENT-E2E";
+const worldBankResultToken = "LUNA-WORLD-BANK-MACRO-E2E";
+const webResearchResultToken = "LUNA-WEB-RESEARCH-E2E";
 const restartedMemoryToken = "LUNA-RESTARTED-MEMORY-E2E";
 const wikiTitle = "WP4 cobalt-foil spare-capacity rule";
 const lensTitle = "WP4 native-e2e capital-cycle lens";
 const acceptanceObservations = {
   streamedAssistantDelta: null,
   financeCore: null,
+  worldBankMacro: null,
+  webResearch: null,
   restartedMemoryReuse: null,
 };
 
@@ -397,6 +401,18 @@ function exactlyOneSucceededProgressRow(rows, expected, caseName) {
   return matches[0];
 }
 
+function assertOnlyNonSystemProgressRows(rows, expected, caseName) {
+  const nonSystemRows = rows.filter((row) => row.category !== "system");
+  assert.equal(
+    nonSystemRows.length,
+    expected.length,
+    `${caseName}: unexpected non-system Work progress rows: ${JSON.stringify(nonSystemRows)}`,
+  );
+  for (const item of expected) {
+    exactlyOneSucceededProgressRow(nonSystemRows, item, caseName);
+  }
+}
+
 const observedTokens = [];
 
 function observeToken(token) {
@@ -572,6 +588,116 @@ async function runFinanceCoreTurn() {
   await setComposerCheckbox("Use memory", true);
   await setComposerCheckbox("Update memory", true);
   await screenshot("finance-core");
+}
+
+async function runWorldBankMacroTurn() {
+  await setComposerCheckbox("Use memory", false);
+  await setComposerCheckbox("Update memory", false);
+
+  const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  await sendPrompt(
+    "Native acceptance test. Do not use Memory, web, compute, artifacts, or any connector other than the named World Bank component. Follow this exact sequence: first call capability_load exactly once with id \"guruterminal.finance-providers/macro-data\"; then call finance_macro_data exactly once with provider \"world-bank.indicators\", economy \"USA\", indicator \"NY.GDP.MKTP.CD\", start_year 2020, and end_year 2021. Do not call any other tool. After both tools succeed, reply exactly: LUNA-WORLD-BANK-MACRO-E2E",
+  );
+  await displayed('button[aria-label="Stop response"]', 15_000);
+  await displayed('[aria-label="Work progress"]', 60_000);
+
+  const assistant = await latestCompleteAssistant(
+    previousComplete,
+    240_000,
+    "world-bank-macro",
+  );
+  await waitForText(assistant, worldBankResultToken, 30_000);
+  observeToken(worldBankResultToken);
+
+  const rows = await latestProgressRows("world-bank-macro");
+  assertOnlyNonSystemProgressRows(
+    rows,
+    [
+      {
+        category: "capability",
+        operation: "read",
+        action: "Opened a tool",
+        target: "guruterminal.finance-providers/macro-data",
+      },
+      {
+        category: "finance",
+        operation: "read",
+        action: "Read macro data",
+        target: "world-bank.indicators · USA · NY.GDP.MKTP.CD · 2020 · 2021",
+      },
+    ],
+    "world-bank-macro",
+  );
+  acceptanceObservations.worldBankMacro = {
+    component: "guruterminal.finance-providers/macro-data",
+    provider: "world-bank.indicators",
+    economy: "USA",
+    indicator: "NY.GDP.MKTP.CD",
+    years: [2020, 2021],
+  };
+
+  await waitUntilIdle();
+  await assertTurnHealthy("world-bank-macro");
+  await setComposerCheckbox("Use memory", true);
+  await setComposerCheckbox("Update memory", true);
+  await screenshot("world-bank-macro");
+}
+
+async function runWebResearchTurn() {
+  await setComposerCheckbox("Use memory", false);
+  await setComposerCheckbox("Update memory", false);
+
+  const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  await sendPrompt(
+    "Native acceptance test. Do not use Memory, finance, compute, or artifacts. Follow this exact sequence: first call capability_load exactly once with id \"community.web-research/research\"; then call web_search exactly once with query \"IANA example domain\" and limit 2; then call web_fetch exactly once with url \"https://example.com/\". The fixed fetch URL is deliberate and independent of the search result; do not replace it with a source_id. Do not call any other tool. After all three tools succeed, reply exactly: LUNA-WEB-RESEARCH-E2E",
+  );
+  await displayed('button[aria-label="Stop response"]', 15_000);
+  await displayed('[aria-label="Work progress"]', 60_000);
+
+  const assistant = await latestCompleteAssistant(
+    previousComplete,
+    240_000,
+    "web-research",
+  );
+  await waitForText(assistant, webResearchResultToken, 30_000);
+  observeToken(webResearchResultToken);
+
+  const rows = await latestProgressRows("web-research");
+  assertOnlyNonSystemProgressRows(
+    rows,
+    [
+      {
+        category: "capability",
+        operation: "read",
+        action: "Opened a tool",
+        target: "community.web-research/research",
+      },
+      {
+        category: "web",
+        operation: "search",
+        action: "Searched the web",
+        target: "IANA example domain",
+      },
+      {
+        category: "web",
+        operation: "read",
+        action: "Read a web source",
+        target: "example.com · example.com",
+      },
+    ],
+    "web-research",
+  );
+  acceptanceObservations.webResearch = {
+    component: "community.web-research/research",
+    searchQuery: "IANA example domain",
+    fetchedUrl: "https://example.com/",
+  };
+
+  await waitUntilIdle();
+  await assertTurnHealthy("web-research");
+  await setComposerCheckbox("Use memory", true);
+  await setComposerCheckbox("Update memory", true);
+  await screenshot("web-research");
 }
 
 async function runArtifactTurn() {
@@ -993,6 +1119,8 @@ try {
     await chooseLunaMax();
     await runCompletedTurn();
     await runFinanceCoreTurn();
+    await runWorldBankMacroTurn();
+    await runWebResearchTurn();
     await runArtifactTurn();
     await runEvidenceChartDecisionTurn();
     await runLearnThenCiteTurns();
