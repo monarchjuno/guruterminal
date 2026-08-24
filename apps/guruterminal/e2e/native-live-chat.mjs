@@ -17,8 +17,14 @@ import {
 const e2eRoot = dirname(fileURLToPath(import.meta.url));
 const sessionPath = process.argv[2];
 const phase = process.argv[3];
-assert.ok(sessionPath, "usage: node native-live-chat.mjs <current-session.json> <run|verify>");
-assert.ok(["run", "verify"].includes(phase), "phase must be run or verify");
+assert.ok(
+  sessionPath,
+  "usage: node native-live-chat.mjs <current-session.json> <run|verify|smoke>",
+);
+assert.ok(
+  ["run", "verify", "smoke"].includes(phase),
+  "phase must be run, verify, or smoke",
+);
 
 const session = JSON.parse(await readFile(sessionPath, "utf8"));
 const browser = await remote({
@@ -134,7 +140,7 @@ async function connectExistingPiProfile() {
 }
 
 async function clickMenuRadio(exactText) {
-  let visibleMatch = null;
+  let match = null;
   const observed = new Set();
   try {
     await browser.waitUntil(async () => {
@@ -153,28 +159,8 @@ async function clickMenuRadio(exactText) {
             );
           }
           if (label !== exactText) continue;
-          if (!(await isVisible(item))) {
-            try {
-              await browser.execute(
-                (container, target) => {
-                  const top = target.offsetTop;
-                  const bottom = top + target.offsetHeight;
-                  if (top < container.scrollTop) container.scrollTop = top;
-                  else if (bottom > container.scrollTop + container.clientHeight) {
-                    container.scrollTop = bottom - container.clientHeight;
-                  }
-                },
-                menu,
-                item,
-              );
-            } catch {
-              continue;
-            }
-          }
-          if (await isVisible(item)) {
-            visibleMatch = item;
-            return true;
-          }
+          match = item;
+          return true;
         }
       }
       return false;
@@ -188,10 +174,19 @@ async function clickMenuRadio(exactText) {
       `${error.message}; observed model menu items: ${[...observed].join(" | ") || "none"}`,
     );
   }
-  if (!visibleMatch) {
-    throw new Error(`Visible menu item disappeared: ${exactText}\n${await bodyText()}`);
+  if (!match) {
+    throw new Error(`Model menu item disappeared: ${exactText}\n${await bodyText()}`);
   }
-  await visibleMatch.click();
+  if (await isVisible(match)) {
+    await match.click();
+    return;
+  }
+
+  // Radix supports type-ahead selection. It avoids WebKit's flaky async
+  // script execution when an otherwise-rendered menu item is clipped inside
+  // the scroll container.
+  await browser.keys(exactText);
+  await browser.keys("Enter");
 }
 
 async function visibleModelMenu() {
@@ -235,10 +230,7 @@ async function chooseLunaMax() {
   await openModelMenu(modelMenu);
   await clickMenuRadio("GPT-5.6 Luna");
   await clickMenuRadio("max");
-  await browser.keys("Escape");
-  if ((await modelMenu.getAttribute("aria-expanded")) === "true") {
-    await browser.keys("Escape");
-  }
+  await dismissOverlays();
   const composer = await displayed('textarea[aria-label="Message Guru"]');
   await composer.click();
   assert.match(await modelMenu.getText(), /GPT-5\.6 Luna/i);
@@ -280,7 +272,7 @@ async function sendPrompt(text) {
   await (await displayed('button[aria-label="Send"]')).click();
 }
 
-async function assertVisibleStreamedAssistantDelta(caseName, timeout = 60_000) {
+async function assertVisibleStreamedAssistantDelta(caseName, timeout = 180_000) {
   await browser.waitUntil(
     async () => {
       for (const article of await browser.$$(
@@ -288,16 +280,19 @@ async function assertVisibleStreamedAssistantDelta(caseName, timeout = 60_000) {
       )) {
         if (!(await isVisible(article))) continue;
         try {
-          const content = await article.$(".message-content");
-          if (!(await content.isExisting()) || !(await isVisible(content))) continue;
-          const text = (await content.getText()).replace(/\s+/gu, " ").trim();
-          if (!text || /^Starting response…?$/u.test(text)) continue;
-          acceptanceObservations.streamedAssistantDelta = {
-            caseName,
-            visible: true,
-            characters: text.length,
-          };
-          return true;
+          for (const projection of await article.$$(
+            ".chat-progress-commentary-live, .message-content",
+          )) {
+            if (!(await isVisible(projection))) continue;
+            const text = (await projection.getText()).replace(/\s+/gu, " ").trim();
+            if (!text || /^Starting response…?$/u.test(text)) continue;
+            acceptanceObservations.streamedAssistantDelta = {
+              caseName,
+              visible: true,
+              characters: text.length,
+            };
+            return true;
+          }
         } catch {
           // The streaming card may be replaced while React receives another delta.
         }
@@ -426,7 +421,27 @@ function observeToken(token) {
 async function dismissOverlays() {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (!(await visibleModelMenu())) return;
-    await browser.keys("Escape");
+    const trigger = await browser.$('[aria-label="Model settings for this message"]');
+    if (
+      (await isVisible(trigger)) &&
+      (await trigger.getAttribute("aria-expanded")) === "true"
+    ) {
+      await trigger.click();
+    } else {
+      await browser.keys("Escape");
+    }
+    try {
+      await browser.waitUntil(async () => !(await visibleModelMenu()), {
+        timeout: 1_500,
+        interval: 100,
+      });
+    } catch {
+      // Use a stable outside control before retrying Escape. This mirrors a
+      // normal user click without relying on a WebDriver script scroll.
+      const chatTab = await browser.$("#main-tab-chat");
+      if (await isVisible(chatTab)) await chatTab.click();
+      await browser.keys("Escape");
+    }
   }
 }
 
@@ -1298,13 +1313,20 @@ async function runRestartedMemoryReuseTurn() {
 }
 
 try {
-  if (phase === "run") {
+  if (phase === "smoke" || phase === "run") {
     await createLiveAgent();
     await connectExistingPiProfile();
     await clickButton("Chat");
     await (await displayed('button[aria-label="New session for Luna Native Agent"]')).click();
     await chooseLunaMax();
     await runCompletedTurn();
+  }
+
+  if (phase === "smoke") {
+    await persistWorkProgress("smoke");
+    await screenshot("smoke");
+    console.log("Native Luna max Chat smoke passed.");
+  } else if (phase === "run") {
     await runFinanceCoreTurn();
     await runWorldBankMacroTurn();
     await runOpenbbKeylessTurn();

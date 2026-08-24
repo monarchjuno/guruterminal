@@ -153,6 +153,13 @@ cd apps/guruterminal/e2e
 GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat
 ```
 
+For a fast, single-turn OAuth smoke check of the Luna/max streaming path:
+
+```bash
+cd apps/guruterminal/e2e
+GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:smoke
+```
+
 `test:live-chat` verifies a visible Luna/max streamed assistant delta, Finance
 Core capability discovery/load plus a deterministic percentage calculation, the
 default World Bank macro-data component through its native public API, and the
