@@ -59,6 +59,51 @@ const runningProgress: ComponentProps<typeof ChatProgressTimeline>["progress"] =
   };
 
 describe("ChatProgressTimeline", () => {
+  it("uses a plain, line-preserving projection for actively changing commentary", () => {
+    const first = {
+      startedAtMs: Date.now(),
+      items: [
+        {
+          id: "commentary-1",
+          kind: "commentary" as const,
+          text: "1. First streamed line",
+        },
+      ],
+    };
+    const { container, rerender } = render(
+      <ChatProgressTimeline
+        progress={first}
+        status="streaming"
+        onOpenLink={async () => undefined}
+      />,
+    );
+
+    const live = container.querySelector(".chat-progress-commentary-live");
+    expect(live).toHaveTextContent("1. First streamed line");
+    expect(live?.textContent).toBe("1. First streamed line");
+
+    rerender(
+      <ChatProgressTimeline
+        progress={{
+          ...first,
+          items: [
+            {
+              id: "commentary-1",
+              kind: "commentary",
+              text: "1. First streamed line\n2. Second streamed line",
+            },
+          ],
+        }}
+        status="streaming"
+        onOpenLink={async () => undefined}
+      />,
+    );
+
+    expect(
+      container.querySelector(".chat-progress-commentary-live")?.textContent,
+    ).toBe("1. First streamed line\n2. Second streamed line");
+  });
+
   it("keeps a live group stable as actions settle without outcome glyphs", async () => {
     const firstAction = runningProgress.items[0]!;
     const secondAction = runningProgress.items[1]!;

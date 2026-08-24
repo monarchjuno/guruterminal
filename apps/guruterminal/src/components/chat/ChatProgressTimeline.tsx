@@ -151,18 +151,29 @@ const statusGlyph = (status: ChatProgressStatus) => {
 
 function CommentaryRow({
   item,
-  isAnimating,
+  isStreaming,
   onOpenLink,
 }: {
   item: CommentaryItem;
-  isAnimating: boolean;
+  isStreaming: boolean;
   onOpenLink: (href: string) => Promise<void>;
 }) {
+  // Keep every in-flight commentary row plain. A tool or system event can
+  // make an earlier commentary non-active while the same response is still
+  // streaming, and no partial response should enter the Markdown renderer.
+  if (isStreaming) {
+    return (
+      <div className="chat-progress-commentary">
+        <p className="chat-progress-commentary-live">{item.text}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="chat-progress-commentary">
       <SafeMessageResponse
         text={item.text}
-        isAnimating={isAnimating}
+        isAnimating={false}
         onOpenLink={onOpenLink}
       />
     </div>
@@ -323,10 +334,6 @@ export function ChatProgressTimeline({ progress, status, onOpenLink }: Props) {
       : status === "error"
         ? `Work failed · ${stepLabel} · ${elapsed}`
         : `${stepLabel}${categoryLabels.length ? ` · ${categoryLabels.join(", ")}` : ""} · ${elapsed}`;
-  const lastCommentaryId = [...progress.items]
-    .reverse()
-    .find((item) => item.kind === "commentary")?.id;
-
   return (
     <section
       className={`chat-progress${hasFailure && status === "error" ? " has-failure" : ""}`}
@@ -367,7 +374,7 @@ export function ChatProgressTimeline({ progress, status, onOpenLink }: Props) {
                 <CommentaryRow
                   item={entry}
                   key={entry.id}
-                  isAnimating={isRunning && entry.id === lastCommentaryId}
+                  isStreaming={isRunning}
                   onOpenLink={onOpenLink}
                 />
               );

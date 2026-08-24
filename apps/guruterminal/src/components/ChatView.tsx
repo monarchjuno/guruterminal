@@ -197,6 +197,30 @@ export function ChatView({
   queuedRef.current = queuedByThread;
   const activeRecoveredRun = localIsRunning ? undefined : recoveredRun;
   const isRunning = localIsRunning || Boolean(activeRecoveredRun);
+  const openChatArtifact = useCallback(
+    (artifact: ChatArtifactRef) => {
+      if (activeThread?.id) {
+        workspaceActions.openArtifact(activeThread.id, artifact);
+      }
+    },
+    [activeThread?.id, workspaceActions],
+  );
+  const openChatLink = useCallback(
+    async (url: string) => {
+      workspaceActions.openLink(url);
+    },
+    [workspaceActions],
+  );
+  const revertMemory = useCallback(
+    async (recordId: string, commitId: string) => {
+      await bridge.libraryMemoryRevert({
+        guru_id: guru.id,
+        record_id: recordId,
+        commit_id: commitId,
+      });
+    },
+    [bridge, guru.id],
+  );
   const streamAnnouncement = activeRecoveredRun
     ? activeRecoveredRun.abort_requested
       ? "Stopping the recovered response."
@@ -591,18 +615,10 @@ export function ChatView({
           onEnableSource={enableSetupSource}
           onOpenMemory={workspaceActions.openMemory}
           onOpenInLibrary={workspaceActions.openInLibrary}
-          onOpenArtifact={(artifact) => {
-            if (activeThread) workspaceActions.openArtifact(activeThread.id, artifact);
-          }}
-          onOpenLink={async (url) => workspaceActions.openLink(url)}
+          onOpenArtifact={openChatArtifact}
+          onOpenLink={openChatLink}
           onReadAttachment={readAttachment}
-          onRevertMemory={async (recordId, commitId) => {
-            await bridge.libraryMemoryRevert({
-              guru_id: guru.id,
-              record_id: recordId,
-              commit_id: commitId,
-            });
-          }}
+          onRevertMemory={revertMemory}
         />
 
         {activeThread && (
