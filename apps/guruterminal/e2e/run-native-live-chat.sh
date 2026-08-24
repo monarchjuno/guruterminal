@@ -7,6 +7,15 @@ SESSION_INFO="$SCRIPT_DIR/artifacts/current-session.json"
 STATE_ROOT=
 RUN_LOG=
 APP_PID=
+REQUESTED_PHASE=${1:-all}
+
+case "$REQUESTED_PHASE" in
+    all|smoke) ;;
+    *)
+        echo "usage: $0 [smoke]" >&2
+        exit 2
+        ;;
+esac
 
 if [ -z "${GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR:-}" ]; then
     echo "GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR is required for the live native Chat E2E." >&2
@@ -92,6 +101,11 @@ run_phase() {
     wait_for_dev_server_exit
 }
 
-run_phase run
-run_phase verify
-echo "Guru Terminal native Luna max Chat E2E passed."
+if [ "$REQUESTED_PHASE" = "smoke" ]; then
+    run_phase smoke
+    echo "Guru Terminal native Luna max Chat smoke passed."
+else
+    run_phase run
+    run_phase verify
+    echo "Guru Terminal native Luna max Chat E2E passed."
+fi

@@ -160,22 +160,11 @@ async function clickVisibleMenuItem(browser, role, exactText) {
         return;
       }
       if (container) {
-        try {
-          await browser.execute(
-            (menu, target) => {
-              const top = target.offsetTop;
-              const bottom = top + target.offsetHeight;
-              if (top < menu.scrollTop) menu.scrollTop = top;
-              else if (bottom > menu.scrollTop + menu.clientHeight) {
-                menu.scrollTop = bottom - menu.clientHeight;
-              }
-            },
-            container,
-            item,
-          );
-        } catch {
-          // Keep waiting for a visible menu item and report the bounded state below.
-        }
+        // Radix keeps clipped menu items in its roving-focus collection. Use
+        // type-ahead instead of a WebKit execute script to reach one.
+        await browser.keys(exactText);
+        await browser.keys("Enter");
+        return;
       }
     }
   }

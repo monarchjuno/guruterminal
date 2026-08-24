@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test:live-chat": "./run-native-live-chat.sh",
+    "test:live-chat:smoke": "./run-native-live-chat.sh smoke",
     "test:native": "./run-native-smoke.sh",
     "test:native:full": "./run-native-smoke.sh --full",
     "test:persistence": "./run-native-persistence.sh",
