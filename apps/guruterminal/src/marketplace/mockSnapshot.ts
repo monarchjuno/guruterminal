@@ -1,4 +1,4 @@
-import marketplaceIndex from "../../marketplace/marketplace.json";
+import marketplaceIndexJson from "../../marketplace/marketplace.json";
 import type {
   GuruCapabilityBinding,
   MarketplaceCatalog,
@@ -8,10 +8,23 @@ import type {
   MarketplaceSnapshot,
 } from "./types";
 
+type BundledConnectorEntry = Omit<MarketplaceEntry, "plugin" | "runtime"> & {
+  runtime: Omit<MarketplaceEntry["runtime"], "kind"> & {
+    kind: MarketplaceEntry["runtime"]["kind"] | "bundled_mcp";
+  };
+};
+
+type BundledMarketplaceIndex = {
+  interface: Pick<MarketplacePlugin["interface"], "displayName">;
+  plugins: Array<Pick<MarketplacePlugin, "name" | "policy" | "category">>;
+};
+
+const marketplaceIndex = marketplaceIndexJson as BundledMarketplaceIndex;
+
 const connectorModules = import.meta.glob(
   "../../marketplace/plugins/*/connectors/*.json",
   { eager: true, import: "default" },
-) as Record<string, Omit<MarketplaceEntry, "plugin">>;
+) as Record<string, BundledConnectorEntry>;
 
 const pluginModules = import.meta.glob(
   "../../marketplace/plugins/*/.guruterminal-plugin/plugin.json",
