@@ -23,6 +23,11 @@ does not change GitHub state. A nonzero result names every missing item. The
 auditor intentionally derives the required release-secret names from the
 workflow so a future signing change cannot silently make the checklist stale.
 
+The immutable-release endpoint requires repository administration read access.
+Release workflows intentionally do not receive an administrative token, so the
+maintainer's authenticated, read-only audit is the release gate for that setting
+rather than adding a broader long-lived credential to every release job.
+
 ## CI
 
 PRs and `main` run frontend, Rust, the finance and OpenBB Python sidecars,

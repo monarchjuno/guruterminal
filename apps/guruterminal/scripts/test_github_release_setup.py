@@ -127,6 +127,10 @@ class GitHubReleaseSetupTest(unittest.TestCase):
         errors = {finding.subject for finding in findings if finding.level == "error"}
         self.assertIn("immutable releases", errors)
 
+        findings = self.audit(immutable_releases=None)
+        errors = {finding.subject for finding in findings if finding.level == "error"}
+        self.assertIn("immutable releases", errors)
+
     def test_disabled_or_incomplete_rulesets_do_not_count_as_protection(self) -> None:
         findings = self.audit(
             rulesets=[
