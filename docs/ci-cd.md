@@ -8,6 +8,20 @@ This page is the release procedure. Product behavior is not defined here. Workfl
 
 Protect `main` and `v*` tags. Protect the `release`, `release-qualification`, and `stable-release` environments. Signing secrets live only in `release`. Final publication has a different reviewer in `stable-release`. Enable immutable GitHub Releases.
 
+Before the first RC, run the checked-in, read-only audit from an authenticated
+GitHub CLI session:
+
+```sh
+python3 apps/guruterminal/scripts/check-github-release-setup.py
+```
+
+It verifies the public repository identity, `main` protection, an active `v*`
+tag rule, each required protected environment, and the **names** of every
+secret referenced by `release.yml`. It never prints or reads secret values and
+does not change GitHub state. A nonzero result names every missing item. The
+auditor intentionally derives the required release-secret names from the
+workflow so a future signing change cannot silently make the checklist stale.
+
 ## CI
 
 PRs and `main` run frontend, Rust, the finance and OpenBB Python sidecars,
