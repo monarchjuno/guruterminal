@@ -10,7 +10,7 @@ const read = (path) => readFileSync(path, "utf8");
 assert.match(read(resolve(e2eRoot, ".npmrc")), /^ignore-scripts=true$/m);
 
 const packageManifest = JSON.parse(read(resolve(e2eRoot, "package.json")));
-assert.equal(packageManifest.devDependencies.webdriverio, "9.30.1");
+assert.equal(packageManifest.devDependencies.webdriverio, "9.31.2");
 assert.equal(packageManifest.scripts.mcp, undefined);
 
 const appLauncher = read(resolve(e2eRoot, "run-app.sh"));
