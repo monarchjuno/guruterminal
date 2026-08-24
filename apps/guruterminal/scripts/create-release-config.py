@@ -14,6 +14,11 @@ from urllib.parse import urlparse
 STABLE_UPDATE_ENDPOINT = (
     "https://github.com/monarchjuno/guruterminal/releases/latest/download/latest.json"
 )
+MACOS_BUNDLE_VERSION = re.compile(r"^[1-9][0-9]*$")
+RELEASE_VERSION = re.compile(
+    r"^(?P<base>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))"
+    r"(?:-rc\.(?P<rc>[1-9][0-9]*))?$"
+)
 
 
 def required_environment(name: str) -> str:
@@ -38,49 +43,37 @@ def https_url(value: str, label: str) -> str:
     return value
 
 
-def update_endpoint_url(value: str, label: str) -> str:
-    value = https_url(value, label)
-    parsed = urlparse(value)
-    if parsed.hostname != "github.com" or parsed.port is not None or parsed.query:
-        raise RuntimeError(f"{label} must use the canonical GitHub release host")
-    stable_path = urlparse(STABLE_UPDATE_ENDPOINT).path
-    exact_rc = re.fullmatch(
-        r"/monarchjuno/guruterminal/releases/download/"
-        r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.([1-9]\d*)/latest\.json",
-        parsed.path,
-    )
-    if parsed.path != stable_path and exact_rc is None:
-        raise RuntimeError(f"{label} must be a Guru Terminal release manifest")
-    return value
-
-
-def update_endpoints() -> list[str]:
-    name = "GURUTERMINAL_UPDATE_ENDPOINTS"
-    try:
-        values = json.loads(required_environment(name))
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"{name} must be a JSON array") from error
-    if not isinstance(values, list) or not values:
-        raise RuntimeError(f"{name} must be a nonempty JSON array")
-    endpoints = []
-    for index, value in enumerate(values):
-        if not isinstance(value, str):
-            raise RuntimeError(f"{name}[{index}] must be a string")
-        endpoints.append(update_endpoint_url(value, f"{name}[{index}]"))
-    if len(set(endpoints)) != len(endpoints):
-        raise RuntimeError(f"{name} must not contain duplicate endpoints")
-    if len(endpoints) > 2 or endpoints[-1] != STABLE_UPDATE_ENDPOINT:
+def update_endpoints(version: str) -> list[str]:
+    match = RELEASE_VERSION.fullmatch(version)
+    if match is None:
         raise RuntimeError(
-            f"{name} must end with the canonical stable endpoint and contain at most one RC endpoint"
+            "--version must be canonical X.Y.Z or X.Y.Z-rc.N (N >= 1) without build metadata"
         )
-    if len(endpoints) == 2 and "-rc." not in endpoints[0]:
-        raise RuntimeError(f"{name}[0] must be the exact next-RC endpoint")
+
+    endpoints = [STABLE_UPDATE_ENDPOINT]
+    rc_number = match.group("rc")
+    if rc_number is not None:
+        endpoints.insert(
+            0,
+            "https://github.com/monarchjuno/guruterminal/releases/download/"
+            f"v{match.group('base')}-rc.{int(rc_number) + 1}/latest.json",
+        )
     return endpoints
+
+
+def macos_bundle_version(value: str | None) -> str:
+    if value is None or MACOS_BUNDLE_VERSION.fullmatch(value) is None:
+        raise RuntimeError(
+            "--macos-bundle-version must be a positive decimal build counter"
+        )
+    return value
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", required=True, choices=("macos", "windows"))
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--macos-bundle-version")
     parser.add_argument("--release-config", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
@@ -93,9 +86,14 @@ def main() -> int:
     config = json.loads(arguments.release_config.read_text(encoding="utf-8"))
     updater = config.setdefault("plugins", {}).setdefault("updater", {})
     updater["pubkey"] = required_environment("GURUTERMINAL_UPDATER_PUBLIC_KEY")
-    updater["endpoints"] = update_endpoints()
+    updater["endpoints"] = update_endpoints(arguments.version)
 
-    if arguments.platform == "windows":
+    if arguments.platform == "macos":
+        macos = config.setdefault("bundle", {}).setdefault("macOS", {})
+        macos["bundleVersion"] = macos_bundle_version(arguments.macos_bundle_version)
+    elif arguments.macos_bundle_version is not None:
+        raise RuntimeError("--macos-bundle-version is valid only for macos builds")
+    else:
         thumbprint = required_environment("GURUTERMINAL_WINDOWS_CERTIFICATE_THUMBPRINT")
         if not re.fullmatch(r"[0-9A-Fa-f]{40}", thumbprint):
             raise RuntimeError("Windows certificate thumbprint must be 40 hex digits")

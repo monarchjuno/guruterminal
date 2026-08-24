@@ -120,9 +120,18 @@ import sys
 assert sys.version_info[:2] == (3, 12), sys.version
 '
     (
+        python_cache_dir=$(mktemp -d "${TMPDIR:-/tmp}/guruterminal-pycompile.XXXXXX")
+        trap 'rm -rf -- "$python_cache_dir"' EXIT HUP INT TERM
+        PYTHONPYCACHEPREFIX="$python_cache_dir" \
+            uv run --project "$PYTHON_ROOT" --locked --no-sync \
+            python -m py_compile "$APP_ROOT"/scripts/*.py
+    )
+    uv run --project "$PYTHON_ROOT" --locked --no-sync \
+        python -m unittest discover -s "$APP_ROOT/scripts" -p 'test_*.py'
+    (
         cd "$PYTHON_ROOT"
-        uv run --locked --no-sync ruff check . "$APP_ROOT/scripts/check-sidecars.py"
-        uv run --locked --no-sync ruff format --check . "$APP_ROOT/scripts/check-sidecars.py"
+        uv run --locked --no-sync ruff check . "$APP_ROOT/scripts"
+        uv run --locked --no-sync ruff format --check . "$APP_ROOT/scripts"
         uv run --locked --no-sync pytest
     )
 

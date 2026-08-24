@@ -23,7 +23,17 @@ SHORT_VERSION_KEY = "CFBundleShortVersionString"
 BUNDLE_VERSION_KEY = "CFBundleVersion"
 
 
-def read_source(tauri_config: Path, source_plist: Path) -> tuple[str, str]:
+def bundle_version(value: object, label: str) -> str:
+    if not isinstance(value, str) or not BUNDLE_VERSION.fullmatch(value):
+        raise ValueError(f"{label} must contain 1-3 numeric components")
+    return value
+
+
+def read_source(
+    tauri_config: Path,
+    source_plist: Path,
+    expected_bundle_version: str | None = None,
+) -> tuple[str, str]:
     config = json.loads(tauri_config.read_text(encoding="utf-8"))
     try:
         source_version = config["version"]
@@ -39,11 +49,12 @@ def read_source(tauri_config: Path, source_plist: Path) -> tuple[str, str]:
         raise ValueError("Tauri version must be valid SemVer")
     semver_base = ".".join(semver.groups()[:3])
 
-    if not isinstance(source_bundle_version, str) or not BUNDLE_VERSION.fullmatch(
-        source_bundle_version
-    ):
-        raise ValueError(
-            "bundle.macOS.bundleVersion must contain 1-3 numeric components"
+    source_bundle_version = bundle_version(
+        source_bundle_version, "bundle.macOS.bundleVersion"
+    )
+    if expected_bundle_version is not None:
+        source_bundle_version = bundle_version(
+            expected_bundle_version, "expected macOS bundle version"
         )
 
     if "infoPlist" in macos:
@@ -83,7 +94,7 @@ def check_packaged_plist(
         )
     if packaged_bundle_version != source_bundle_version:
         raise ValueError(
-            "packaged CFBundleVersion differs from bundle.macOS.bundleVersion"
+            "packaged CFBundleVersion differs from the expected macOS build version"
         )
 
 
@@ -92,10 +103,13 @@ def main() -> int:
     parser.add_argument("--tauri-config", required=True, type=Path)
     parser.add_argument("--source-plist", required=True, type=Path)
     parser.add_argument("--bundle-plist", type=Path)
+    parser.add_argument("--expected-bundle-version")
     arguments = parser.parse_args()
 
     short_version, bundle_version = read_source(
-        arguments.tauri_config, arguments.source_plist
+        arguments.tauri_config,
+        arguments.source_plist,
+        arguments.expected_bundle_version,
     )
     if arguments.bundle_plist is not None:
         check_packaged_plist(arguments.bundle_plist, short_version, bundle_version)

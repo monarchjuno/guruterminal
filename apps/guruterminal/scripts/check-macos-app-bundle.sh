@@ -1,8 +1,15 @@
 #!/bin/sh
 set -eu
 
-APP_BUNDLE=${1:?usage: check-macos-app-bundle.sh /path/to/Guru\ Terminal.app}
-if [ "$#" -ne 1 ] || [ ! -d "$APP_BUNDLE" ]; then
+APP_BUNDLE=${1:?usage: check-macos-app-bundle.sh /path/to/Guru\ Terminal.app [--expected-bundle-version BUILD]}
+EXPECTED_BUNDLE_VERSION=
+if [ "$#" -eq 3 ] && [ "$2" = "--expected-bundle-version" ]; then
+    EXPECTED_BUNDLE_VERSION=$3
+elif [ "$#" -ne 1 ]; then
+    echo "usage: check-macos-app-bundle.sh /path/to/Guru Terminal.app [--expected-bundle-version BUILD]" >&2
+    exit 2
+fi
+if [ ! -d "$APP_BUNDLE" ]; then
     echo "Guru Terminal app bundle is missing: $APP_BUNDLE" >&2
     exit 1
 fi
@@ -86,10 +93,14 @@ for executable in "$MACOS_DIR/guruterminal" "$CORE_BINARY" "$PI_BINARY" "$FINANC
     fi
 done
 
-"$PYTHON_BIN" "$SCRIPT_DIR/check-macos-bundle-version.py" \
+set -- \
     --tauri-config "$TAURI_ROOT/tauri.conf.json" \
     --source-plist "$TAURI_ROOT/Info.plist" \
     --bundle-plist "$CONTENTS/Info.plist"
+if [ -n "$EXPECTED_BUNDLE_VERSION" ]; then
+    set -- "$@" --expected-bundle-version "$EXPECTED_BUNDLE_VERSION"
+fi
+"$PYTHON_BIN" "$SCRIPT_DIR/check-macos-bundle-version.py" "$@"
 if [ "$(plutil -extract CFBundleIdentifier raw -o - "$CONTENTS/Info.plist")" != com.monarchjuno.guruterminal ] || \
     [ "$(plutil -extract CFBundleExecutable raw -o - "$CONTENTS/Info.plist")" != guruterminal ] || \
     [ "$(plutil -extract CFBundleDisplayName raw -o - "$CONTENTS/Info.plist")" != 'Guru Terminal' ] || \

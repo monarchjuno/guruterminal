@@ -19,6 +19,7 @@ RELEASE_VERSION = re.compile(
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 CHECKSUM_LINE = re.compile(r"^([0-9a-f]{64})  ([^/\\]+)$")
+MACOS_BUNDLE_VERSION = re.compile(r"^[1-9][0-9]*$")
 
 
 def sha256(path: Path) -> str:
@@ -122,12 +123,13 @@ def main() -> int:
         "version",
         "source_commit",
         "workflow_run_id",
+        "macos_bundle_version",
         "updater_manifest",
         "artifacts",
         "download_aliases",
     }
-    if set(metadata) != required_metadata or metadata["schema_version"] != 1:
-        raise RuntimeError("release metadata schema is not exactly version 1")
+    if set(metadata) != required_metadata or metadata["schema_version"] != 2:
+        raise RuntimeError("release metadata schema is not exactly version 2")
     if (
         metadata["repository"] != arguments.repository
         or metadata["tag"] != arguments.tag
@@ -152,6 +154,12 @@ def main() -> int:
         or int(workflow_run_id) < 1
     ):
         raise RuntimeError("release metadata workflow run id is invalid")
+    macos_bundle_version = metadata["macos_bundle_version"]
+    if (
+        not isinstance(macos_bundle_version, str)
+        or MACOS_BUNDLE_VERSION.fullmatch(macos_bundle_version) is None
+    ):
+        raise RuntimeError("release metadata macOS bundle version is invalid")
 
     expected_artifacts = {
         name: {"sha256": sha256(arguments.assets / name)} for name in canonical
