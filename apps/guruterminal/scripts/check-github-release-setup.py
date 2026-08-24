@@ -147,6 +147,31 @@ def environment_is_protected(environment: dict[str, object]) -> bool:
     )
 
 
+def environment_requires_independent_reviewer(environment: dict[str, object]) -> bool:
+    """Return whether an environment needs a reviewer other than the initiator."""
+
+    protection_rules = environment.get("protection_rules")
+    if not isinstance(protection_rules, list):
+        return False
+    for rule in protection_rules:
+        if not isinstance(rule, dict) or rule.get("type") != "required_reviewers":
+            continue
+        reviewers = rule.get("reviewers")
+        if rule.get("prevent_self_review") is True and isinstance(reviewers, list):
+            return bool(reviewers)
+    return False
+
+
+def immutable_releases_are_enabled(value: object | None) -> bool:
+    if value is None:
+        return False
+    release_settings = require_object(value, "immutable releases response")
+    return (
+        release_settings.get("enabled") is True
+        or release_settings.get("enforced_by_owner") is True
+    )
+
+
 def environment_secret_names(value: object) -> set[str]:
     payload = require_object(value, "environment secrets response")
     secrets = payload.get("secrets")
@@ -170,6 +195,7 @@ def audit_release_setup(
     repository_data: object,
     rulesets: object,
     main_has_legacy_protection: bool,
+    immutable_releases: object | None,
     environments: object,
 ) -> list[Finding]:
     """Evaluate supplied public metadata without performing network I/O."""
@@ -201,6 +227,15 @@ def audit_release_setup(
         add("pass", "default branch", "default branch is main")
     else:
         add("error", "default branch", "default branch must be main")
+
+    if immutable_releases_are_enabled(immutable_releases):
+        add(
+            "pass",
+            "immutable releases",
+            "release assets cannot be changed after publication",
+        )
+    else:
+        add("error", "immutable releases", "enable immutable GitHub Releases")
 
     main_protected = main_has_legacy_protection or any_ruleset_protects(
         rulesets,
@@ -236,6 +271,14 @@ def audit_release_setup(
                 "error",
                 f"environment {name}",
                 "required release environment is missing",
+            )
+        elif name == "stable-release" and not environment_requires_independent_reviewer(
+            environment
+        ):
+            add(
+                "error",
+                f"environment {name}",
+                "configure a required reviewer and prevent self-review",
             )
         elif environment_is_protected(environment):
             add("pass", f"environment {name}", "deployment protection is configured")
@@ -291,6 +334,11 @@ def remote_audit(repository: str, workflow: Path, gh: str) -> list[Finding]:
         f"/repos/{repository}/branches/{EXPECTED_DEFAULT_BRANCH}/protection",
         allow_not_found=True,
     )
+    immutable_releases = gh_api(
+        gh,
+        f"/repos/{repository}/immutable-releases",
+        allow_not_found=True,
+    )
     environments = gh_api(gh, f"/repos/{repository}/environments?per_page=100")
     configured_environments = environments_by_name(environments)
     release_secrets: set[str] = set()
@@ -308,6 +356,7 @@ def remote_audit(repository: str, workflow: Path, gh: str) -> list[Finding]:
         repository_data=repository_data,
         rulesets=rulesets,
         main_has_legacy_protection=main_protection is not None,
+        immutable_releases=immutable_releases,
         environments=environments,
     )
 
