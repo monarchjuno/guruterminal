@@ -44,7 +44,18 @@ def configured_environments() -> dict[str, object]:
         "environments": [
             {"name": "release", "protection_rules": [{"id": 1}]},
             {"name": "release-qualification", "protection_rules": [{"id": 2}]},
-            {"name": "stable-release", "protection_rules": [{"id": 3}]},
+            {
+                "name": "stable-release",
+                "protection_rules": [
+                    {
+                        "type": "required_reviewers",
+                        "prevent_self_review": True,
+                        "reviewers": [
+                            {"type": "User", "reviewer": {"id": 1, "login": "reviewer"}}
+                        ],
+                    }
+                ],
+            },
         ]
     }
 
@@ -63,6 +74,7 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             },
             "rulesets": configured_rulesets(),
             "main_has_legacy_protection": False,
+            "immutable_releases": {"enabled": True, "enforced_by_owner": False},
             "environments": configured_environments(),
         }
         defaults.update(overrides)
@@ -70,13 +82,14 @@ class GitHubReleaseSetupTest(unittest.TestCase):
 
     def test_configured_repository_passes_every_required_check(self) -> None:
         findings = self.audit()
-        self.assertEqual([finding.level for finding in findings], ["pass"] * 8)
+        self.assertEqual([finding.level for finding in findings], ["pass"] * 9)
 
     def test_missing_protection_environments_and_secrets_are_actionable(self) -> None:
         findings = self.audit(
             rulesets=[],
             environments={"environments": []},
             release_secrets=set(),
+            immutable_releases={"enabled": False, "enforced_by_owner": False},
         )
         errors = {
             finding.subject: finding.detail
@@ -85,6 +98,7 @@ class GitHubReleaseSetupTest(unittest.TestCase):
         }
         self.assertIn("main protection", errors)
         self.assertIn("release tags", errors)
+        self.assertIn("immutable releases", errors)
         self.assertIn("environment release", errors)
         self.assertIn("environment release-qualification", errors)
         self.assertIn("environment stable-release", errors)
@@ -93,6 +107,21 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             "missing workflow-referenced secret names: "
             "GURUTERMINAL_UPDATER_PUBLIC_KEY, GURUTERMINAL_WINDOWS_CERTIFICATE",
         )
+
+    def test_repository_owner_immutable_release_enforcement_counts_as_enabled(
+        self,
+    ) -> None:
+        findings = self.audit(
+            immutable_releases={"enabled": False, "enforced_by_owner": True}
+        )
+        self.assertNotIn("error", [finding.level for finding in findings])
+
+    def test_disabled_immutable_releases_are_actionable(self) -> None:
+        findings = self.audit(
+            immutable_releases={"enabled": False, "enforced_by_owner": False}
+        )
+        errors = {finding.subject for finding in findings if finding.level == "error"}
+        self.assertIn("immutable releases", errors)
 
     def test_disabled_or_empty_rulesets_do_not_count_as_protection(self) -> None:
         findings = self.audit(
@@ -125,10 +154,50 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                 "deployment_branch_policy": {"protected_branches": True},
             },
             {"name": "release-qualification", "protection_rules": [{"id": 2}]},
-            {"name": "stable-release", "protection_rules": [{"id": 3}]},
+            configured_environments()["environments"][2],
         ]
         findings = self.audit(environments=environments)
         self.assertNotIn("error", [finding.level for finding in findings])
+
+    def test_stable_release_requires_an_independent_reviewer(self) -> None:
+        environments = configured_environments()
+        environments["environments"][2] = {
+            "name": "stable-release",
+            "protection_rules": [{"type": "wait_timer", "wait_timer": 5}],
+        }
+        findings = self.audit(environments=environments)
+        errors = {
+            finding.subject: finding.detail
+            for finding in findings
+            if finding.level == "error"
+        }
+        self.assertEqual(
+            errors["environment stable-release"],
+            "configure a required reviewer and prevent self-review",
+        )
+
+    def test_stable_release_reviewer_cannot_self_approve(self) -> None:
+        environments = configured_environments()
+        environments["environments"][2] = {
+            "name": "stable-release",
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [{"type": "User", "reviewer": {"id": 1}}],
+                }
+            ],
+        }
+        findings = self.audit(environments=environments)
+        errors = {
+            finding.subject: finding.detail
+            for finding in findings
+            if finding.level == "error"
+        }
+        self.assertEqual(
+            errors["environment stable-release"],
+            "configure a required reviewer and prevent self-review",
+        )
 
     def test_workflow_secret_references_are_derived_without_reading_values(
         self,
