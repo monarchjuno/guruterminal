@@ -28,7 +28,7 @@ npm test -- <test-file>
 cargo test --manifest-path apps/guruterminal/src-tauri/Cargo.toml <test-name> --locked
 
 # finance worker
-uv run --project apps/guruterminal/python --locked pytest
+(cd apps/guruterminal/python && uv run --locked pytest)
 
 # OpenBB MCP sidecar
 uv run --project apps/guruterminal/openbb --locked pytest apps/guruterminal/openbb/tests
@@ -38,6 +38,10 @@ node --test apps/guruterminal/agent/*.test.mjs
 
 # compute
 npm test --prefix apps/guruterminal/compute
+
+# opt-in public-service smokes (not CI)
+cargo test --manifest-path apps/guruterminal/src-tauri/Cargo.toml --locked live_world_bank_macro_data_smoke -- --ignored
+cargo test --manifest-path apps/guruterminal/src-tauri/Cargo.toml --locked live_public_fetch_smoke -- --ignored
 ```
 
 From `apps/guruterminal/`, `npm run check:web`, `npm run check:rust`, and

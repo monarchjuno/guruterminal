@@ -43,7 +43,7 @@ Docs describe the current product. They are not a lock on future architecture. C
 | Marketplace / credentials | `docs/bundled-capabilities.md`, `apps/guruterminal/marketplace/` | `cargo test --manifest-path apps/guruterminal/src-tauri/Cargo.toml marketplace --locked` |
 | Desktop UI | `apps/guruterminal/AGENTS.md` | `npm test -- <test-file>` from `apps/guruterminal` |
 | Sidecar | `src/`, `tests/` | `cargo test --test <name> --locked` |
-| Finance worker | `apps/guruterminal/python/` | `uv run --project apps/guruterminal/python --locked pytest` |
+| Finance worker | `apps/guruterminal/python/` | `cd apps/guruterminal/python && uv run --locked pytest` |
 
 `scripts/verify.sh` is the repository handoff gate, not the edit loop. Use `npm run tauri dev` from `apps/guruterminal/` for the shared window. Debug builds use a development app-data directory and must not touch installed-app state.
 
