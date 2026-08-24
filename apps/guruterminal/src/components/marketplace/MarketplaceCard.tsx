@@ -15,7 +15,7 @@ import type {
 } from "../../marketplace/types";
 import { CONNECTOR_READINESS_LABELS } from "../../marketplace/readiness";
 
-export const FREE_STATE_LABELS: Record<MarketplaceFreeState, string> = {
+const FREE_STATE_LABELS: Record<MarketplaceFreeState, string> = {
   keyless: "No API key required",
   free_account: "Free account required",
   local: "Local data",
