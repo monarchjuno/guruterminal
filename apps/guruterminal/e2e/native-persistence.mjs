@@ -24,6 +24,125 @@ const { displayed, clickButton, waitForText } = createWebdriverHelpers(
   { defaultTimeout: 10_000, bodyTextLimit: 16_000 },
 );
 
+const IMPORTED_AGENT = "Imported Memory E2E";
+const IMPORTED_RECORDS = [
+  {
+    title: "Imported Quality Covenant",
+    kind: "Wiki",
+    query: "quality covenant",
+    detail: "cash conversion above reported earnings",
+  },
+  {
+    title: "Imported Risk Discipline",
+    kind: "Lens",
+    query: "risk discipline",
+    detail: "before changing a position size",
+  },
+  {
+    title: "Imported Cash Observation",
+    kind: "Evidence",
+    query: "cash observation",
+    detail: "2026-Q2 conversion check",
+  },
+  {
+    title: "Imported Allocation Review",
+    kind: "Decision",
+    query: "allocation review",
+    detail: "downside review ahead of a larger allocation",
+  },
+];
+
+async function navigateTo(text) {
+  for (const button of await browser.$$("button")) {
+    if ((await button.isDisplayed()) && (await button.getText()).trim() === text) {
+      await button.click();
+      return;
+    }
+  }
+  await (await displayed('button[data-sidebar="trigger"]')).click();
+  await clickButton(text);
+}
+
+async function selectImportedAgent() {
+  const agents = await displayed("#main-panel-agents");
+  const findImportedAgent = async () => {
+    for (const button of await agents.$$(".agents-list-item")) {
+      if (
+        (await button.isDisplayed()) &&
+        (await button.getText()).trim().startsWith(IMPORTED_AGENT)
+      ) {
+        return button;
+      }
+    }
+    return null;
+  };
+  await browser.waitUntil(async () => Boolean(await findImportedAgent()), {
+    timeout: 10_000,
+    interval: 100,
+    timeoutMsg: `Imported agent did not appear: ${IMPORTED_AGENT}`,
+  });
+  const imported = await findImportedAgent();
+  assert.ok(imported, `Imported agent disappeared: ${IMPORTED_AGENT}`);
+  await imported.click();
+  await browser.waitUntil(
+    async () => {
+      const current = await findImportedAgent();
+      return (await current?.getAttribute("data-active")) === "true";
+    },
+    {
+      timeout: 10_000,
+      interval: 100,
+      timeoutMsg: `Imported agent was not selected: ${IMPORTED_AGENT}`,
+    },
+  );
+}
+
+async function assertImportedMemory() {
+  await navigateTo("Memory");
+  const library = await displayed("#main-panel-library");
+  await waitForText(library, "4 pages.");
+  for (const record of IMPORTED_RECORDS) await waitForText(library, record.title);
+
+  const search = await displayed('input[placeholder="Search memory"]');
+  for (const record of IMPORTED_RECORDS) {
+    const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
+    await kindFilter.click();
+    await browser.waitUntil(
+      async () => (await kindFilter.getAttribute("aria-pressed")) === "true",
+      {
+        timeout: 10_000,
+        interval: 100,
+        timeoutMsg: `${record.kind} filter was not selected`,
+      },
+    );
+    await search.setValue(record.query);
+    const selector = `button[aria-label^="Open ${record.title} ("]`;
+    await browser.waitUntil(
+      async () => {
+        const labels = [];
+        for (const button of await library.$$("button[data-library-result]")) {
+          if (await button.isDisplayed()) {
+            labels.push(await button.getAttribute("aria-label"));
+          }
+        }
+        return labels.length === 1 && labels[0]?.startsWith(`Open ${record.title} (`);
+      },
+      {
+        timeout: 10_000,
+        interval: 100,
+        timeoutMsg: `Search did not return only ${record.title}`,
+      },
+    );
+    const result = await displayed(selector);
+    await result.click();
+    await waitForText(library, record.detail);
+    assert.equal(await result.getAttribute("aria-current"), "page");
+  }
+  await search.setValue("");
+  await clickButton("All types", library);
+  await waitForText(library, "4 pages.");
+}
+
 try {
   if (phase === "seed") {
     const onboarding = await displayed("main");
@@ -49,11 +168,18 @@ try {
     await (await displayed("#rename-thread-name")).setValue("Persistent session");
     await clickButton("Save", dialog);
     await waitForText(await displayed('[aria-label="Application navigation"]'), "Persistent session");
+    await clickButton("Agents");
+    const agentsAfterSession = await displayed("#main-panel-agents");
+    await clickButton("Import", agentsAfterSession);
+    await waitForText(agentsAfterSession, IMPORTED_AGENT);
+    await selectImportedAgent();
+    await assertImportedMemory();
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-seed.png"));
-    console.log("Native persistence seed passed.");
+    console.log("Native persistence seed with Memory import passed.");
   } else {
     const navigation = await displayed('[aria-label="Application navigation"]');
     await waitForText(navigation, "Persistent E2E Agent");
+    await (await displayed('button[title="Persistent E2E Agent"]')).click();
     await waitForText(navigation, "Persistent session");
     await clickButton("Agents");
     const agents = await displayed("#main-panel-agents");
@@ -68,8 +194,11 @@ try {
       0,
       "Chat composer must remain unavailable until a provider is connected",
     );
+    await clickButton("Agents");
+    await selectImportedAgent();
+    await assertImportedMemory();
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-verify.png"));
-    console.log("Native persistence restart passed.");
+    console.log("Native persistence restart with imported Memory passed.");
   }
 } catch (error) {
   await browser.saveScreenshot(
