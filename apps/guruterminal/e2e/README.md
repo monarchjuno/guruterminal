@@ -120,6 +120,11 @@ cd apps/guruterminal/e2e
 npm run test:native:full
 ```
 
+When a CI job stages bundled runtimes, set
+`GURUTERMINAL_E2E_REQUIRE_STAGED_RUNTIMES=1`; the full suite then requires the
+OpenBB Platform Marketplace card to report `Ready`. Local development keeps the
+fallback assertion that the card reports either `Ready` or `Runtime unavailable`.
+
 Run the two-launch persistence contract separately:
 
 ```bash
@@ -127,8 +132,10 @@ cd apps/guruterminal/e2e
 npm run test:persistence
 ```
 
-It creates isolated state, persists an Agent and Chat through the UI, restarts
-the native app, verifies the same state, then removes only its own test state.
+It creates isolated state, persists an Agent and Chat through the UI, imports a
+validated Wiki/Lens/Evidence/Decision fixture through the real Memory import
+action, restarts the native app, verifies the same state and imported records,
+then removes only its own test state.
 
 Model, Core, and finance flows require the normal staging step:
 

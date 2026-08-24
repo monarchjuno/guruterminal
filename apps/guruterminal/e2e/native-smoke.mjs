@@ -238,11 +238,19 @@ try {
       );
       return heading?.closest(".marketplace-card")?.innerText ?? "";
     });
-    assert.match(
-      openbbCard,
-      /Runtime unavailable|Ready/,
-      `OpenBB Platform must expose runtime status, not a dead setup path\n${openbbCard}`,
-    );
+    if (process.env.GURUTERMINAL_E2E_REQUIRE_STAGED_RUNTIMES === "1") {
+      assert.match(
+        openbbCard,
+        /Ready/,
+        `A staged E2E build must expose OpenBB Platform as Ready\n${openbbCard}`,
+      );
+    } else {
+      assert.match(
+        openbbCard,
+        /Runtime unavailable|Ready/,
+        `OpenBB Platform must expose runtime status, not a dead setup path\n${openbbCard}`,
+      );
+    }
     assert.doesNotMatch(openbbCard, /Needs setup/);
     const openbbGroup = await browser.execute(() =>
       [...document.querySelectorAll(".marketplace-group h2")].some(

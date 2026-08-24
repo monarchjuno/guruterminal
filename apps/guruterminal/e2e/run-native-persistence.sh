@@ -4,9 +4,15 @@ umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SESSION_INFO="$SCRIPT_DIR/artifacts/current-session.json"
+IMPORT_ROOT="$SCRIPT_DIR/fixtures/Imported Memory E2E"
 STATE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/guruterminal-persistence-e2e.XXXXXX")
 RUN_LOG=$(mktemp "${TMPDIR:-/tmp}/guruterminal-persistence-log.XXXXXX")
 APP_PID=
+
+if [ ! -d "$IMPORT_ROOT" ] || [ -L "$IMPORT_ROOT" ]; then
+    echo "Native Memory import fixture is missing or invalid: $IMPORT_ROOT" >&2
+    exit 1
+fi
 
 cleanup_app() {
     if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
@@ -68,6 +74,7 @@ run_phase() {
     : >"$RUN_LOG"
     rm -f -- "$SESSION_INFO"
     GURUTERMINAL_E2E_STATE_DIR="$STATE_ROOT" \
+        GURUTERMINAL_E2E_IMPORT_DIR="$IMPORT_ROOT" \
         "$SCRIPT_DIR/run-app.sh" >"$RUN_LOG" 2>&1 &
     APP_PID=$!
 
