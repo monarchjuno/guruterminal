@@ -376,6 +376,58 @@ class ReleaseAssetsContractTest(unittest.TestCase):
                 str(receipt),
             )
 
+    def test_stable_qualification_sequence_requires_latest_after_first_release(
+        self,
+    ) -> None:
+        self.assert_script_succeeds(
+            "release-qualification.py",
+            "sequence",
+            "--candidate-tag",
+            "v0.0.1",
+            "--previous-tag",
+            "v0.0.1-rc.1",
+            "--latest-stable-tag",
+            "",
+        )
+        self.assert_script_succeeds(
+            "release-qualification.py",
+            "sequence",
+            "--candidate-tag",
+            "v0.0.1",
+            "--previous-tag",
+            "v0.0.0",
+            "--latest-stable-tag",
+            "v0.0.0",
+        )
+
+        rc_after_stable = self.run_script(
+            "release-qualification.py",
+            "sequence",
+            "--candidate-tag",
+            "v0.0.1",
+            "--previous-tag",
+            "v0.0.1-rc.1",
+            "--latest-stable-tag",
+            "v0.0.0",
+        )
+        self.assertNotEqual(rc_after_stable.returncode, 0)
+        self.assertIn(
+            "must start from the current Latest release", rc_after_stable.stderr
+        )
+
+        non_monotonic = self.run_script(
+            "release-qualification.py",
+            "sequence",
+            "--candidate-tag",
+            "v0.0.1",
+            "--previous-tag",
+            "v0.0.0",
+            "--latest-stable-tag",
+            "v0.0.1",
+        )
+        self.assertNotEqual(non_monotonic.returncode, 0)
+        self.assertIn("must be strictly newer", non_monotonic.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

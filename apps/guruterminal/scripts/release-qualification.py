@@ -48,6 +48,39 @@ def predecessor_version(tag: str) -> tuple[int, int, int, int, int]:
     )
 
 
+def validate_release_sequence(
+    candidate_tag: str, previous_tag: str, latest_stable_tag: str
+) -> None:
+    """Require an N-1 candidate path that cannot downgrade the stable feed."""
+
+    candidate_version = stable_version(candidate_tag)
+    previous_version = predecessor_version(previous_tag)
+    candidate_order = (*candidate_version, 1, 0)
+    if previous_version >= candidate_order:
+        raise RuntimeError("the qualified installed release must precede the candidate")
+
+    if latest_stable_tag:
+        latest_version = stable_version(latest_stable_tag)
+        if candidate_version <= latest_version:
+            raise RuntimeError(
+                "candidate stable release must be strictly newer than the current Latest release"
+            )
+        if previous_tag != latest_stable_tag:
+            raise RuntimeError(
+                "after the first stable release, qualification must start from the current Latest release"
+            )
+        return
+
+    matching_rc = RC_TAG.fullmatch(previous_tag)
+    if (
+        matching_rc is None
+        or tuple(map(int, matching_rc.groups()[:3])) != candidate_version
+    ):
+        raise RuntimeError(
+            "the first stable release must qualify from its matching published RC"
+        )
+
+
 def evidence_url(value: str, label: str) -> str:
     parsed = urlparse(value)
     if (
@@ -259,6 +292,15 @@ def print_digest(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def validate_sequence(arguments: argparse.Namespace) -> int:
+    validate_release_sequence(
+        arguments.candidate_tag,
+        arguments.previous_tag,
+        arguments.latest_stable_tag,
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -291,6 +333,12 @@ def main() -> int:
     digest = subparsers.add_parser("digest")
     digest.add_argument("--release-metadata", required=True, type=Path)
     digest.set_defaults(handler=print_digest)
+
+    sequence = subparsers.add_parser("sequence")
+    sequence.add_argument("--candidate-tag", required=True)
+    sequence.add_argument("--previous-tag", required=True)
+    sequence.add_argument("--latest-stable-tag", required=True)
+    sequence.set_defaults(handler=validate_sequence)
 
     arguments = parser.parse_args()
     return arguments.handler(arguments)

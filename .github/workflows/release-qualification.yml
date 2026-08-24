@@ -118,10 +118,8 @@ jobs:
             "$RUNNER_TEMP/release-pages.json" \
             "$CANDIDATE_TAG" \
             "$PREDECESSOR_TAG" \
-            "$LATEST_STABLE_TAG" \
             "$SOURCE_COMMIT" >> "$GITHUB_OUTPUT" <<'PY'
           import json
-          import re
           import sys
 
           pages = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -130,8 +128,7 @@ jobs:
           releases = [release for page in pages for release in page]
           tag = sys.argv[2]
           previous_tag = sys.argv[3]
-          latest_stable_tag = sys.argv[4]
-          source_commit = sys.argv[5]
+          source_commit = sys.argv[4]
           matches = [release for release in releases if release["tag_name"] == tag]
           if len(matches) != 1:
               raise SystemExit("candidate tag must identify exactly one release")
@@ -146,17 +143,14 @@ jobs:
           predecessor = predecessors[0]
           if predecessor["draft"] or predecessor["published_at"] is None:
               raise SystemExit("qualified predecessor must already be published")
-          candidate_base = tag.removeprefix("v")
-          if predecessor["prerelease"]:
-              expected = rf"^v{re.escape(candidate_base)}-rc\.[1-9][0-9]*$"
-              if re.fullmatch(expected, previous_tag) is None:
-                  raise SystemExit("RC predecessor must belong to the stable candidate")
-          elif previous_tag != latest_stable_tag:
-              raise SystemExit("stable predecessor is no longer the Latest release")
           print(f"release_id={release['id']}")
           print(f"source_commit={source_commit}")
           print(f"version={tag.removeprefix('v')}")
           PY
+          python3 apps/guruterminal/scripts/release-qualification.py sequence \
+            --candidate-tag "$CANDIDATE_TAG" \
+            --previous-tag "$PREDECESSOR_TAG" \
+            --latest-stable-tag "$LATEST_STABLE_TAG"
 
   platform-preflight:
     name: ${{ matrix.name }} signed package preflight
