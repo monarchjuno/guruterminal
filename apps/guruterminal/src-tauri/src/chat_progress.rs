@@ -568,7 +568,20 @@ fn summarize_tool(
             ChatProgressCategory::Finance,
             ChatProgressOperation::Read,
             "Read macro data",
-            join_values(args, &["provider", "series", "series_id", "start", "end"]),
+            join_values(
+                args,
+                &[
+                    "provider",
+                    "economy",
+                    "indicator",
+                    "start_year",
+                    "end_year",
+                    "series",
+                    "series_id",
+                    "start",
+                    "end",
+                ],
+            ),
         ),
         "finance_market_data" | "finance_company_data" | "finance_filings" => presentation(
             ChatProgressCategory::Finance,
@@ -975,6 +988,22 @@ mod tests {
         assert_eq!(
             kis.target.as_deref(),
             Some("koreainvestment.market-data · domestic_stock.inquire_price")
+        );
+        let macro_data = summarize_tool(
+            "finance_macro_data",
+            &json!({
+                "provider": "world-bank.indicators",
+                "economy": "USA",
+                "indicator": "NY.GDP.MKTP.CD",
+                "start_year": 2020,
+                "end_year": 2021
+            }),
+            None,
+        );
+        assert_eq!(macro_data.action, "Read macro data");
+        assert_eq!(
+            macro_data.target.as_deref(),
+            Some("world-bank.indicators · USA · NY.GDP.MKTP.CD · 2020 · 2021")
         );
     }
 
