@@ -180,8 +180,10 @@ fn korea_investment_catalog_is_read_only() {
 fn release_workflows_pin_actions_and_identity() {
     let release = text(".github/workflows/release.yml");
     let ci = text(".github/workflows/ci.yml");
+    let qualification = text(".github/workflows/release-qualification.yml");
+    let promotion = text(".github/workflows/promote-release.yml");
     assert!(release.contains("test \"$GITHUB_REPOSITORY\" = \"monarchjuno/guruterminal\""));
-    for workflow in [&release, &ci] {
+    for workflow in [&release, &ci, &qualification, &promotion] {
         for line in workflow.lines().map(str::trim) {
             let Some(action) = line.strip_prefix("uses: ") else {
                 continue;
@@ -208,7 +210,6 @@ fn release_workflows_pin_actions_and_identity() {
         );
     }
 
-    let promotion = text(".github/workflows/promote-release.yml");
     assert!(promotion.contains("environment: stable-release"));
     assert!(!promotion.contains("tauri build"));
     assert!(!promotion.contains("release upload"));
