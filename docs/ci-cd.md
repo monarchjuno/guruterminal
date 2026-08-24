@@ -11,8 +11,14 @@ Protect `main` and `v*` tags. Protect the `release`, `release-qualification`, an
 ## CI
 
 PRs and `main` run frontend, Rust, the finance and OpenBB Python sidecars,
-compute, repository checks, and signed-target package smokes. Actions are pinned
+compute, repository checks, and target-platform package smokes. Actions are pinned
 to commit SHAs. Toolchain pins: Rust 1.97.1, uv 0.11.2, Syft 1.50.0.
+
+The macOS CI job also stages the same pinned sidecars used by the package smoke
+and drives an isolated native WebView through onboarding, Agent, Marketplace,
+Memory, Chat lifecycle, accessibility, and restart-persistence flows. It uses
+no provider or connector credentials; the explicitly authorized live Chat suite
+is a pre-release acceptance step rather than CI input.
 
 A release tag is accepted only from a `main` commit whose `ci.yml` push run succeeded. The tag workflow builds packages; it does not re-run that source gate.
 
