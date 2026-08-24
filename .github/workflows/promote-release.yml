@@ -159,34 +159,26 @@ jobs:
             > "$RUNNER_TEMP/release-pages-before-promotion.json"
           python3 - \
             "$RUNNER_TEMP/release-pages-before-promotion.json" \
-            "$CANDIDATE_TAG" \
-            "$PREDECESSOR_TAG" \
-            "$LATEST_STABLE_TAG" <<'PY'
+            "$PREDECESSOR_TAG" <<'PY'
           import json
-          import re
           import sys
 
           pages = json.load(open(sys.argv[1], encoding="utf-8"))
           if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
               raise SystemExit("paginated releases response is malformed")
           releases = [release for page in pages for release in page]
-          candidate_tag, predecessor_tag, latest_stable_tag = sys.argv[2:]
+          predecessor_tag = sys.argv[2]
           matches = [
               release for release in releases
               if release["tag_name"] == predecessor_tag
           ]
           if len(matches) != 1 or matches[0]["draft"] or matches[0]["published_at"] is None:
               raise SystemExit("qualified predecessor is no longer published")
-          if matches[0]["prerelease"]:
-              candidate_base = candidate_tag.removeprefix("v")
-              if re.fullmatch(
-                  rf"v{re.escape(candidate_base)}-rc\.[1-9][0-9]*",
-                  predecessor_tag,
-              ) is None:
-                  raise SystemExit("qualified RC no longer matches the candidate")
-          elif predecessor_tag != latest_stable_tag:
-              raise SystemExit("qualified stable predecessor is no longer Latest")
           PY
+          python3 apps/guruterminal/scripts/release-qualification.py sequence \
+            --candidate-tag "$CANDIDATE_TAG" \
+            --previous-tag "$PREDECESSOR_TAG" \
+            --latest-stable-tag "$LATEST_STABLE_TAG"
           apps/guruterminal/scripts/verify-release-attestations.sh \
             candidate-assets \
             "$GITHUB_REPOSITORY" \
