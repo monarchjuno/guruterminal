@@ -89,6 +89,49 @@ fn source_inventory_projects_catalog_metadata_and_runtime_overlays() {
 }
 
 #[tokio::test]
+#[ignore = "requires public World Bank Indicators API access"]
+async fn live_world_bank_macro_data_smoke() {
+    let service = FinanceDataService::new().unwrap();
+    let output = service
+        .macro_data(json!({
+            "provider": WORLD_BANK_SOURCE_ID,
+            "economy": "USA",
+            "indicator": "NY.GDP.MKTP.CD",
+            "start_year": 2020,
+            "end_year": 2021
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(output["schema_version"], "guruterminal-finance-result/1");
+    assert_eq!(output["tool"], "finance_macro_data");
+    assert_eq!(output["operation"], "macro.series");
+    assert_eq!(output["source_id"], WORLD_BANK_SOURCE_ID);
+    assert_eq!(output["query"]["economy"], "USA");
+    assert_eq!(output["query"]["indicator"], "NY.GDP.MKTP.CD");
+    assert_eq!(output["provenance"]["official_source"], true);
+    assert!(output["provenance"]["source_url"]
+        .as_str()
+        .is_some_and(|url| {
+            url.starts_with("https://api.worldbank.org/v2/country/USA/indicator/NY.GDP.MKTP.CD?")
+        }));
+    assert_eq!(output["quality"]["status"], "pass");
+
+    let observations = output["data"]["observations"].as_array().unwrap();
+    assert!(!observations.is_empty());
+    assert!(observations.len() <= 2);
+    assert!(observations.iter().all(|observation| {
+        let year = observation["period"]
+            .as_str()
+            .and_then(|value| value.parse::<i32>().ok());
+        matches!(year, Some(2020 | 2021))
+    }));
+    assert!(observations
+        .iter()
+        .any(|observation| observation["value"].is_string()));
+}
+
+#[tokio::test]
 async fn credential_verification_rejects_unknown_or_malformed_inputs_before_network() {
     let service = FinanceDataService::new().unwrap();
     let malformed = BTreeMap::from([("api_key".to_owned(), "not-a-secret".to_owned())]);
