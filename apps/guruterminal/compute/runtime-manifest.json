@@ -1,0 +1,93 @@
+{
+  "schema_version": "guruterminal-compute-runtime/1",
+  "deno": {
+    "version": "2.9.5",
+    "archives": {
+      "aarch64-apple-darwin": {
+        "file": "deno-aarch64-apple-darwin.zip",
+        "sha256": "b796aadd131f6930560c1ee040cf0d6f53933fbb987464e9ff46bd7ea4830615"
+      },
+      "x86_64-pc-windows-msvc": {
+        "file": "deno-x86_64-pc-windows-msvc.zip",
+        "sha256": "171efab55ac6b9881fd53ee4c20f8bf3bb1340ffc618483746909014db12216a"
+      }
+    }
+  },
+  "pyodide": {
+    "version": "314.0.3",
+    "packages": [
+      {
+        "name": "joblib",
+        "version": "1.5.3",
+        "file": "joblib-1.5.3-py3-none-any.whl",
+        "sha256": "b2263b31e10db62fc9b7d307a270064017040001e6c24a8d6aff1db2d62d4821"
+      },
+      {
+        "name": "numpy",
+        "version": "2.4.3",
+        "file": "numpy-2.4.3-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "sha256": "0cad9c1b91f0082e4f959bc0e0bf5835a2efbba6ab3b1e9d1fe6e7e564cca98e"
+      },
+      {
+        "name": "packaging",
+        "version": "26.1",
+        "file": "packaging-26.1-py3-none-any.whl",
+        "sha256": "2719239437268bcea22845651a242f2c252e2ed984645161dd203546f2a52219"
+      },
+      {
+        "name": "pandas",
+        "version": "3.0.2",
+        "file": "pandas-3.0.2-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "sha256": "51475a2026084c3b600566658fffc95efc5a71593472ab8a561d92a504a15a3e"
+      },
+      {
+        "name": "patsy",
+        "version": "1.0.2",
+        "file": "patsy-1.0.2-py2.py3-none-any.whl",
+        "sha256": "b47a353700dee69323fbc56dff35e19075b0f02537b3aafa0d4dd2d702af4598"
+      },
+      {
+        "name": "python-dateutil",
+        "version": "2.9.0.post0",
+        "file": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+        "sha256": "e0dad39eec43965d30ef0dbe870617bd5a7ca795c65fda722a7ab2bbd2b747e3"
+      },
+      {
+        "name": "pytz",
+        "version": "2026.1.post1",
+        "file": "pytz-2026.1.post1-py2.py3-none-any.whl",
+        "sha256": "b746aea4d621b01e8c9c5e8e3a6498daecec99f5bffa429beaf3cd6483b14f61"
+      },
+      {
+        "name": "scikit-learn",
+        "version": "1.8.0",
+        "file": "scikit_learn-1.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "sha256": "2ebb90e80c0efc5fe4d392197d6838878a7cd8c899c1aa59369d18d0ffe13ca9"
+      },
+      {
+        "name": "scipy",
+        "version": "1.18.0",
+        "file": "scipy-1.18.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "sha256": "4ef1569eac793bec84a92fa2eaf24eafb4529ff10c5ed87d1e335063f26142f3"
+      },
+      {
+        "name": "six",
+        "version": "1.17.0",
+        "file": "six-1.17.0-py2.py3-none-any.whl",
+        "sha256": "c6681057bd87fdec57e811b8e4007bad38deea284052817fa400d542c6423e2d"
+      },
+      {
+        "name": "statsmodels",
+        "version": "0.14.6",
+        "file": "statsmodels-0.14.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "sha256": "cccb1d00257af36be6b5c91edcdd34f7c383bd7caa42529e4e22811700424795"
+      },
+      {
+        "name": "threadpoolctl",
+        "version": "3.6.0",
+        "file": "threadpoolctl-3.6.0-py3-none-any.whl",
+        "sha256": "3aaf76e073749216354f3bf597768410ed3d2575e103e79ecaaf100b84e4ac6e"
+      }
+    ]
+  }
+}

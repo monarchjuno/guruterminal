@@ -1,0 +1,20 @@
+{
+  "name": "guruterminal-e2e-tools",
+  "private": true,
+  "version": "0.0.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test:live-chat": "./run-native-live-chat.sh",
+    "test:native": "./run-native-smoke.sh",
+    "test:native:full": "./run-native-smoke.sh --full",
+    "test:persistence": "./run-native-persistence.sh",
+    "verify-security": "node verify-security.mjs"
+  },
+  "devDependencies": {
+    "webdriverio": "9.30.1"
+  }
+}

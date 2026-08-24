@@ -1,0 +1,69 @@
+{
+  "id": "cftc.commitments",
+  "name": "CFTC",
+  "summary": "Commitments of Traders and public market reports through OpenBB; an app token raises API limits.",
+  "publisher": "OpenBB",
+  "data_authority": "U.S. Commodity Futures Trading Commission",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "cftc"
+    ],
+    "credential_mapping": {
+      "app_token": "cftc_app_token"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "cftc_cot_search",
+      "arguments": {
+        "query": "crude oil",
+        "provider": "cftc"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "United States"
+  ],
+  "asset_classes": [
+    "Futures",
+    "Options"
+  ],
+  "capabilities": [
+    "derivatives.commitments_of_traders"
+  ],
+  "freshness": [
+    "Periodic",
+    "Historical"
+  ],
+  "attribution": "CFTC via OpenBB",
+  "terms_url": "https://publicreporting.cftc.gov/",
+  "permissions": {
+    "network_hosts": [
+      "publicreporting.cftc.gov"
+    ],
+    "credential_kinds": [
+      "app_token"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "app_token",
+        "kind": "api_key",
+        "options": [],
+        "label": "CFTC app token",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://dev.socrata.com/foundry/publicreporting.cftc.gov"
+      }
+    ]
+  }
+}

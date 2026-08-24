@@ -1,0 +1,44 @@
+{
+  "id": "guruterminal.compute-python",
+  "name": "Python Compute",
+  "summary": "Run Python for analysis in a sandbox with no network and no filesystem access.",
+  "publisher": "Guru Terminal",
+  "data_authority": "User and agent supplied inputs",
+  "kind": "analysis_tool",
+  "free_state": "local",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "local_worker",
+    "server_id": null,
+    "worker_id": "compute",
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Multi-asset"
+  ],
+  "capabilities": [
+    "compute.python",
+    "compute.numpy",
+    "compute.pandas",
+    "compute.scipy",
+    "compute.statsmodels",
+    "compute.scikit-learn"
+  ],
+  "freshness": [
+    "Local calculation"
+  ],
+  "attribution": "Runs locally on this device",
+  "terms_url": null,
+  "permissions": {
+    "network_hosts": [],
+    "credential_kinds": []
+  }
+}

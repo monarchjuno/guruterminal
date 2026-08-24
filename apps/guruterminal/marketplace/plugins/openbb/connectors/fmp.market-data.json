@@ -1,0 +1,75 @@
+{
+  "id": "fmp.market-data",
+  "name": "Financial Modeling Prep",
+  "summary": "Global company, market, and fundamental data through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Financial Modeling Prep",
+  "kind": "data_source",
+  "free_state": "paid",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "fmp"
+    ],
+    "credential_mapping": {
+      "api_key": "fmp_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "equity_price_quote",
+      "arguments": {
+        "symbol": "AAPL",
+        "provider": "fmp"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Equity",
+    "ETF",
+    "Index",
+    "FX",
+    "Crypto"
+  ],
+  "capabilities": [
+    "market.quote",
+    "market.history",
+    "company.fundamentals",
+    "company.news"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Financial Modeling Prep via OpenBB",
+  "terms_url": "https://site.financialmodelingprep.com/developer/docs",
+  "permissions": {
+    "network_hosts": [
+      "financialmodelingprep.com"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "FMP API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://site.financialmodelingprep.com/developer/docs"
+      }
+    ]
+  }
+}

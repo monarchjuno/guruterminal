@@ -1,0 +1,16 @@
+{
+  "name": "@guruterminal/compute-runtime",
+  "private": true,
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "pyodide": "314.0.3"
+  }
+}

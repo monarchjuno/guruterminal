@@ -1,0 +1,325 @@
+@media (max-width: 1100px) {
+  .library-page {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .library-sidebar {
+    max-height: 42vh;
+    padding: 14px 16px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .library-results {
+    min-height: 0;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .library-result-group {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .library-result-group ul {
+    flex-direction: row;
+  }
+  .library-results button {
+    min-width: 220px;
+    flex: 0 0 220px;
+  }
+  .library-kind-filters,
+  .library-status-filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .library-kind-filters > *,
+  .library-status-filters > * {
+    flex: 0 0 auto;
+  }
+  .library-results p {
+    -webkit-line-clamp: 2;
+  }
+  .library-reader {
+    width: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    padding: 22px 28px 56px;
+  }
+  .library-home-kinds {
+    grid-template-columns: 1fr;
+  }
+
+  .marketplace-grid {
+    grid-template-columns: 1fr;
+  }
+  .marketplace-filter-select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .app-header {
+    flex-basis: 52px;
+    min-height: 52px;
+    padding: 0 12px;
+  }
+  .context-title span:not(.context-icon) {
+    display: none;
+  }
+  .guru-presence small {
+    display: none;
+  }
+  .chat-workspace {
+    min-height: 0;
+  }
+  .workspace-heading {
+    padding: 14px 18px;
+  }
+  .message-scroll {
+    padding: 24px 18px;
+  }
+  .message.user {
+    width: 88%;
+  }
+  .chat-empty {
+    width: 100%;
+  }
+  .composer {
+    width: calc(100% - 24px);
+    margin-bottom: 12px;
+  }
+  .segmented-control {
+    width: 100%;
+  }
+  .segmented-control button {
+    flex: 1;
+    justify-content: center;
+  }
+  .library-page {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .library-sidebar {
+    max-height: 48vh;
+    padding: 14px 12px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .library-title h1 {
+    font-size: var(--gg-text-title);
+  }
+  .search-box {
+    margin-top: 10px;
+  }
+  .library-filters {
+    margin: 8px 0;
+  }
+  .result-summary {
+    display: flex;
+  }
+  .library-results {
+    min-height: 0;
+    flex-direction: row;
+    gap: 5px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .library-results button {
+    min-width: 180px;
+    flex: 0 0 180px;
+    gap: 3px;
+    padding: 8px 9px;
+  }
+  .library-results p {
+    -webkit-line-clamp: 1;
+  }
+  .library-reader {
+    width: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    padding: 25px 18px 50px;
+  }
+  .record-meta {
+    flex-wrap: wrap;
+  }
+  .record-more {
+    margin-left: 0;
+  }
+  .markdown-frontmatter {
+    grid-template-columns: 1fr;
+  }
+  .markdown-frontmatter dl {
+    grid-template-columns: 1fr;
+  }
+  .relation-group-items {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-footer {
+    min-width: 0;
+    align-items: flex-end;
+  }
+  .composer-tools {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .composer-tools::-webkit-scrollbar {
+    display: none;
+  }
+  .composer-tools > [data-slot="button"],
+  .composer-option {
+    flex: 0 0 auto;
+  }
+  .composer-option-label {
+    display: none;
+  }
+  .composer-queue-action,
+  .composer-steer-action {
+    min-width: 0;
+  }
+  .composer-model-menu {
+    max-width: 168px;
+  }
+  .composer-shell {
+    width: calc(100% - 24px);
+    margin-bottom: 12px;
+  }
+  .composer {
+    width: 100%;
+    margin: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-header {
+    padding-inline: 10px;
+  }
+  .guru-presence {
+    display: none;
+  }
+  .guru-presence strong {
+    max-width: 118px;
+  }
+  .workspace-heading {
+    padding: 12px;
+  }
+  .workspace-heading .memory-state {
+    display: none;
+  }
+  .message-scroll {
+    padding: 0;
+  }
+  .message.user {
+    width: fit-content;
+    max-width: 90%;
+  }
+  .composer-option {
+    width: 32px;
+    padding-inline: 0;
+  }
+  .composer-model-menu {
+    max-width: 148px;
+  }
+  .library-page {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .library-sidebar {
+    max-height: 52vh;
+  }
+  .library-results p {
+    display: none;
+  }
+  .record-heading-row {
+    align-items: flex-start;
+  }
+  .record-heading .segmented-control {
+    width: 100%;
+  }
+  .record-heading .segmented-control button {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 1400px) {
+  .agents-page {
+    padding: 24px 20px 36px;
+  }
+  .agents-layout {
+    grid-template-columns: 1fr;
+  }
+  .agents-list-pane {
+    overflow: hidden;
+    padding: 0 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .agents-list {
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+  .agents-list-item {
+    min-width: 190px;
+  }
+  .agent-editor {
+    padding: 0 0 20px;
+  }
+  .agent-editor-heading {
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: center;
+    padding: 18px 0;
+  }
+  .agent-editor-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 900px) {
+  .agents-page {
+    padding: 20px 12px 28px;
+  }
+  .agent-editor-actions > [data-slot="button"] {
+    flex: 1 1 auto;
+  }
+  .agent-section-heading {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .agent-section-heading > [data-slot="button"] {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 620px) {
+  .agents-page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .agents-page-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

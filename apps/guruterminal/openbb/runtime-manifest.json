@@ -1,0 +1,433 @@
+{
+  "schema_version": "guruterminal-mcp-runtime/1",
+  "runtime_id": "openbb",
+  "executable": "guruterminal-openbb",
+  "python": "3.12",
+  "uv_lock_sha256": "f55253263f4fd5ba931f16b45935d3ca3ea4113def7d3b554c49f3bf48df7b02",
+  "packages": {
+    "openbb": "4.7.2",
+    "openbb-mcp-server": "1.4.1"
+  },
+  "protocol": {
+    "transport": "stdio",
+    "bootstrap_type": "guruterminal.bootstrap",
+    "bootstrap_version": 1,
+    "bootstrap_max_bytes": 65536,
+    "initial_tools": "admin_only",
+    "control_tool_names": [
+      "activate_category",
+      "activate_tools",
+      "available_categories",
+      "available_tools",
+      "deactivate_tools"
+    ],
+    "provider_receipt_pointer": "/structuredContent/provider",
+    "tool_activation": {
+      "tool_name": "activate_tools",
+      "argument_name": "tool_names"
+    }
+  },
+  "security": {
+    "read_only": true,
+    "allowed_http_methods": ["GET", "POST"],
+    "read_only_post_routes": [
+      "/api/v1/derivatives/options/surface",
+      "/api/v1/econometrics/*",
+      "/api/v1/quantitative/*",
+      "/api/v1/technical/*",
+      "/api/v1/uscongress/bill_text",
+      "/api/v1/uscongress/amendment_text"
+    ],
+    "disabled_surfaces": ["skills", "prompts", "resources", "package_install", "trading"]
+  },
+  "providerless_tool_policy": {
+    "local_tools": [
+      "coverage_command_model",
+      "coverage_commands",
+      "coverage_providers",
+      "derivatives_options_surface",
+      "econometrics_autocorrelation",
+      "econometrics_causality",
+      "econometrics_cointegration",
+      "econometrics_correlation_matrix",
+      "econometrics_ols_regression",
+      "econometrics_ols_regression_summary",
+      "econometrics_panel_between",
+      "econometrics_panel_first_difference",
+      "econometrics_panel_fixed",
+      "econometrics_panel_fmac",
+      "econometrics_panel_pooled",
+      "econometrics_panel_random_effects",
+      "econometrics_residual_autocorrelation",
+      "econometrics_unit_root",
+      "econometrics_variance_inflation_factor",
+      "quantitative_normality",
+      "quantitative_performance_omega_ratio",
+      "quantitative_performance_sharpe_ratio",
+      "quantitative_performance_sortino_ratio",
+      "quantitative_rolling_kurtosis",
+      "quantitative_rolling_mean",
+      "quantitative_rolling_quantile",
+      "quantitative_rolling_skew",
+      "quantitative_rolling_stdev",
+      "quantitative_rolling_variance",
+      "quantitative_stats_kurtosis",
+      "quantitative_stats_mean",
+      "quantitative_stats_quantile",
+      "quantitative_stats_skew",
+      "quantitative_stats_stdev",
+      "quantitative_stats_variance",
+      "quantitative_summary",
+      "quantitative_unitroot_test",
+      "technical_ad",
+      "technical_adosc",
+      "technical_adx",
+      "technical_aroon",
+      "technical_atr",
+      "technical_bbands",
+      "technical_cci",
+      "technical_cg",
+      "technical_clenow",
+      "technical_cones",
+      "technical_demark",
+      "technical_donchian",
+      "technical_ema",
+      "technical_fib",
+      "technical_fisher",
+      "technical_hma",
+      "technical_ichimoku",
+      "technical_kc",
+      "technical_macd",
+      "technical_obv",
+      "technical_relative_rotation",
+      "technical_rsi",
+      "technical_sma",
+      "technical_stoch",
+      "technical_vwap",
+      "technical_wma",
+      "technical_zlma"
+    ],
+    "implicit_provider": {
+      "imf_utils_get_dataflow_dimensions": "imf",
+      "imf_utils_list_dataflow_choices": "imf",
+      "imf_utils_list_dataflows": "imf",
+      "imf_utils_list_port_id_choices": "imf",
+      "imf_utils_list_table_choices": "imf",
+      "imf_utils_list_tables": "imf",
+      "imf_utils_presentation_table": "imf",
+      "imf_utils_presentation_table_choices": "imf",
+      "quantitative_capm": "famafrench"
+    }
+  },
+  "allowed_categories": [
+    "cftc",
+    "commodity",
+    "coverage",
+    "crypto",
+    "currency",
+    "derivatives",
+    "econometrics",
+    "economy",
+    "equity",
+    "etf",
+    "famafrench",
+    "fixedincome",
+    "imf_utils",
+    "index",
+    "news",
+    "quantitative",
+    "regulators",
+    "technical",
+    "uscongress"
+  ],
+  "providers": [
+    {
+      "id": "alpha_vantage",
+      "package": "openbb-alpha-vantage",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["www.alphavantage.co"],
+      "credential_mapping": {"api_key": "alpha_vantage_api_key"},
+      "verification_probe": {
+        "tool": "equity_price_historical",
+        "arguments": {"symbol": "AAPL", "start_date": "2024-01-02", "end_date": "2024-01-03", "provider": "alpha_vantage"}
+      }
+    },
+    {
+      "id": "benzinga",
+      "package": "openbb-benzinga",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["api.benzinga.com"],
+      "credential_mapping": {"api_key": "benzinga_api_key"},
+      "verification_probe": {"tool": "news_world", "arguments": {"limit": 1, "provider": "benzinga"}}
+    },
+    {
+      "id": "biztoc",
+      "package": "openbb-biztoc",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["biztoc.p.rapidapi.com"],
+      "credential_mapping": {"api_key": "biztoc_api_key"},
+      "verification_probe": {"tool": "news_world", "arguments": {"limit": 1, "provider": "biztoc"}}
+    },
+    {
+      "id": "bls",
+      "package": "openbb-bls",
+      "version": "1.3.1",
+      "keyless": true,
+      "network_hosts": ["api.bls.gov", "download.bls.gov"],
+      "credential_mapping": {"api_key": "bls_api_key"},
+      "verification_probe": {
+        "tool": "economy_survey_bls_series",
+        "arguments": {"symbol": "CES0000000001", "start_date": "2024-01-01", "end_date": "2024-02-01", "provider": "bls"}
+      }
+    },
+    {
+      "id": "cboe",
+      "package": "openbb-cboe",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["cdn.cboe.com", "www.cboe.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "cftc",
+      "package": "openbb-cftc",
+      "version": "1.4.2",
+      "keyless": true,
+      "network_hosts": ["publicreporting.cftc.gov"],
+      "credential_mapping": {"app_token": "cftc_app_token"},
+      "verification_probe": {"tool": "cftc_cot_search", "arguments": {"query": "crude oil", "provider": "cftc"}}
+    },
+    {
+      "id": "congress_gov",
+      "package": "openbb-congress-gov",
+      "version": "1.2.3",
+      "keyless": false,
+      "network_hosts": ["api.congress.gov", "unitedstates.github.io", "www.congress.gov", "www.govinfo.gov"],
+      "credential_mapping": {"api_key": "congress_gov_api_key"},
+      "verification_probe": {"tool": "uscongress_bills", "arguments": {"provider": "congress_gov"}}
+    },
+    {
+      "id": "deribit",
+      "package": "openbb-deribit",
+      "version": "1.2.1",
+      "keyless": true,
+      "network_hosts": ["www.deribit.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "ecb",
+      "package": "openbb-ecb",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["data.ecb.europa.eu", "www.ecb.europa.eu"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "econdb",
+      "package": "openbb-econdb",
+      "version": "1.5.1",
+      "keyless": false,
+      "network_hosts": ["www.econdb.com"],
+      "credential_mapping": {"api_key": "econdb_api_key"},
+      "verification_probe": {"tool": "economy_country_profile", "arguments": {"country": "US", "provider": "econdb"}}
+    },
+    {
+      "id": "eia",
+      "package": "openbb-us-eia",
+      "version": "1.3.1",
+      "keyless": false,
+      "network_hosts": ["api.eia.gov", "ir.eia.gov", "www.eia.gov"],
+      "credential_mapping": {"api_key": "eia_api_key"},
+      "verification_probe": {
+        "tool": "commodity_short_term_energy_outlook",
+        "arguments": {"start_date": "2024-01-01", "end_date": "2024-02-01", "provider": "eia"}
+      }
+    },
+    {
+      "id": "famafrench",
+      "package": "openbb-famafrench",
+      "version": "1.2.1",
+      "keyless": true,
+      "network_hosts": ["mba.tuck.dartmouth.edu"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "federal_reserve",
+      "package": "openbb-federal-reserve",
+      "version": "1.6.2",
+      "keyless": true,
+      "network_hosts": ["markets.newyorkfed.org", "www.federalreserve.gov", "www.frbsf.org", "www.newyorkfed.org", "www.philadelphiafed.org"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "finra",
+      "package": "openbb-finra",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["api.finra.org", "cdn.finra.org", "www.finra.org"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "finviz",
+      "package": "openbb-finviz",
+      "version": "1.5.1",
+      "keyless": true,
+      "network_hosts": ["finviz.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "fmp",
+      "package": "openbb-fmp",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["financialmodelingprep.com"],
+      "credential_mapping": {"api_key": "fmp_api_key"},
+      "verification_probe": {"tool": "equity_price_quote", "arguments": {"symbol": "AAPL", "provider": "fmp"}}
+    },
+    {
+      "id": "fred",
+      "package": "openbb-fred",
+      "version": "1.6.2",
+      "keyless": false,
+      "network_hosts": ["api.stlouisfed.org", "fred.stlouisfed.org"],
+      "credential_mapping": {"api_key": "fred_api_key"},
+      "verification_probe": {"tool": "economy_fred_series", "arguments": {"symbol": "GDP", "limit": 1, "provider": "fred"}}
+    },
+    {
+      "id": "government_us",
+      "package": "openbb-government-us",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["apps.fas.usda.gov", "esmis.nal.usda.gov", "treasurydirect.gov", "www.treasurydirect.gov"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "imf",
+      "package": "openbb-imf",
+      "version": "2.1.3",
+      "keyless": true,
+      "network_hosts": ["api.imf.org", "hub.arcgis.com", "services9.arcgis.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "intrinio",
+      "package": "openbb-intrinio",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["api-v2.intrinio.com"],
+      "credential_mapping": {"api_key": "intrinio_api_key"},
+      "verification_probe": {"tool": "equity_price_quote", "arguments": {"symbol": "AAPL", "provider": "intrinio"}}
+    },
+    {
+      "id": "multpl",
+      "package": "openbb-multpl",
+      "version": "1.3.1",
+      "keyless": true,
+      "network_hosts": ["www.multpl.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "nasdaq",
+      "package": "openbb-nasdaq",
+      "version": "1.6.3",
+      "keyless": true,
+      "network_hosts": ["api.nasdaq.com", "data.nasdaq.com", "www.nasdaq.com"],
+      "credential_mapping": {"api_key": "nasdaq_api_key"},
+      "verification_probe": {"tool": "equity_search", "arguments": {"query": "AAPL", "provider": "nasdaq"}}
+    },
+    {
+      "id": "oecd",
+      "package": "openbb-oecd",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["sdmx.oecd.org"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "sec",
+      "package": "openbb-sec",
+      "version": "1.6.7",
+      "keyless": true,
+      "network_hosts": ["data.sec.gov", "efts.sec.gov", "sec.gov", "www.hmrc.gov.uk", "www.sec.gov", "www.w3.org", "www.xbrl.org", "xbrl.fasb.org", "xbrl.frc.org.uk", "xbrl.ifrs.org", "xbrl.org", "xbrl.sec.gov"],
+      "credential_mapping": {},
+      "config_mapping": {"contact_email": "sec_contact_email"}
+    },
+    {
+      "id": "seeking_alpha",
+      "package": "openbb-seeking-alpha",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["seekingalpha.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "stockgrid",
+      "package": "openbb-stockgrid",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["www.stockgrid.io"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "tiingo",
+      "package": "openbb-tiingo",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["api.tiingo.com"],
+      "credential_mapping": {"token": "tiingo_token"},
+      "verification_probe": {
+        "tool": "equity_price_historical",
+        "arguments": {"symbol": "AAPL", "start_date": "2024-01-02", "end_date": "2024-01-03", "provider": "tiingo"}
+      }
+    },
+    {
+      "id": "tmx",
+      "package": "openbb-tmx",
+      "version": "1.5.2",
+      "keyless": true,
+      "network_hosts": ["app-money.tmx.com", "bondtradedata.iiroc.ca", "dgr53wu9i7rmp.cloudfront.net", "money.tmx.com", "tmxinfoservices.com", "www.m-x.ca", "www.tmx.com", "www.tsx.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "tradier",
+      "package": "openbb-tradier",
+      "version": "1.5.1",
+      "keyless": false,
+      "network_hosts": ["api.tradier.com", "sandbox.tradier.com"],
+      "credential_mapping": {"api_key": "tradier_api_key"},
+      "config_mapping": {"account_type": "tradier_account_type"},
+      "verification_probe": {"tool": "equity_price_quote", "arguments": {"symbol": "AAPL", "provider": "tradier"}}
+    },
+    {
+      "id": "tradingeconomics",
+      "package": "openbb-tradingeconomics",
+      "version": "1.6.1",
+      "keyless": false,
+      "network_hosts": ["api.tradingeconomics.com"],
+      "credential_mapping": {"api_key": "tradingeconomics_api_key"},
+      "verification_probe": {
+        "tool": "economy_calendar",
+        "arguments": {"start_date": "2024-01-02", "end_date": "2024-01-03", "provider": "tradingeconomics"}
+      }
+    },
+    {
+      "id": "wsj",
+      "package": "openbb-wsj",
+      "version": "1.6.1",
+      "keyless": true,
+      "network_hosts": ["www.wsj.com"],
+      "credential_mapping": {}
+    },
+    {
+      "id": "yfinance",
+      "package": "openbb-yfinance",
+      "version": "1.6.3",
+      "keyless": true,
+      "network_hosts": ["consent.yahoo.com", "fc.yahoo.com", "finance.yahoo.com", "guce.yahoo.com", "markets.businessinsider.com", "query1.finance.yahoo.com", "query2.finance.yahoo.com"],
+      "credential_mapping": {}
+    }
+  ]
+}

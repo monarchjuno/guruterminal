@@ -1,0 +1,73 @@
+{
+  "id": "tiingo.market-data",
+  "name": "Tiingo",
+  "summary": "Equity, fund, crypto, and news data through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Tiingo",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "tiingo"
+    ],
+    "credential_mapping": {
+      "token": "tiingo_token"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "equity_price_historical",
+      "arguments": {
+        "symbol": "AAPL",
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-03",
+        "provider": "tiingo"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Equity",
+    "ETF",
+    "Crypto"
+  ],
+  "capabilities": [
+    "market.history",
+    "company.news"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Tiingo via OpenBB",
+  "terms_url": "https://www.tiingo.com/documentation/general/overview",
+  "permissions": {
+    "network_hosts": [
+      "api.tiingo.com"
+    ],
+    "credential_kinds": [
+      "token"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "token",
+        "kind": "api_key",
+        "options": [],
+        "label": "Tiingo token",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://www.tiingo.com/account/api/token"
+      }
+    ]
+  }
+}

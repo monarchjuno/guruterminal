@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki"
+  short_description: "Use when the user selects this Skill or asks to organize, update, or retain stable descriptive facts in Wiki."
+  default_prompt: "Use $wiki to organize the stable facts from this request into Wiki."

@@ -1,0 +1,17 @@
+{
+  "name": "guruterminal-compute",
+  "version": "1.0.0",
+  "description": "Run Python for analysis in a sandbox with no network and no filesystem access.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "Python Compute",
+    "shortDescription": "Run Python for analysis in a sandbox with no network and no filesystem access.",
+    "category": "Local",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

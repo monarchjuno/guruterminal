@@ -1,0 +1,91 @@
+{
+  "id": "tradier.market-data",
+  "name": "Tradier",
+  "summary": "Read-only equity and options market data through the bundled OpenBB runtime; trading endpoints are excluded.",
+  "publisher": "OpenBB",
+  "data_authority": "Tradier",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "tradier"
+    ],
+    "credential_mapping": {
+      "api_key": "tradier_api_key"
+    },
+    "config_mapping": {
+      "account_type": "tradier_account_type"
+    },
+    "verification_probe": {
+      "tool_name": "equity_price_quote",
+      "arguments": {
+        "symbol": "AAPL",
+        "provider": "tradier"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "United States"
+  ],
+  "asset_classes": [
+    "Equity",
+    "Options"
+  ],
+  "capabilities": [
+    "market.quote",
+    "market.history",
+    "market.options"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Tradier via OpenBB",
+  "terms_url": "https://documentation.tradier.com/",
+  "permissions": {
+    "network_hosts": [
+      "api.tradier.com",
+      "sandbox.tradier.com"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [
+      {
+        "id": "account_type",
+        "kind": "select",
+        "options": [
+          "sandbox",
+          "live"
+        ],
+        "label": "Tradier account type",
+        "required": true,
+        "min_length": 4,
+        "max_length": 7,
+        "help_url": "https://documentation.tradier.com/"
+      }
+    ],
+    "credential_scope_fields": [
+      "account_type"
+    ],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Tradier API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://documentation.tradier.com/"
+      }
+    ]
+  }
+}

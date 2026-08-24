@@ -1,0 +1,69 @@
+{
+  "id": "alpha-vantage.market-data",
+  "name": "Alpha Vantage",
+  "summary": "Recent daily stock prices with a free Alpha Vantage account.",
+  "publisher": "Guru Terminal",
+  "data_authority": "Alpha Vantage",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "alpha_vantage"
+    ],
+    "credential_mapping": {
+      "api_key": "alpha_vantage_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "equity_price_historical",
+      "arguments": {
+        "symbol": "AAPL",
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-03",
+        "provider": "alpha_vantage"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Equity"
+  ],
+  "capabilities": [
+    "market.ohlcv"
+  ],
+  "freshness": [
+    "Most recent 100 daily observations"
+  ],
+  "attribution": "Alpha Vantage",
+  "terms_url": "https://www.alphavantage.co/support/",
+  "permissions": {
+    "network_hosts": [
+      "www.alphavantage.co"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Alpha Vantage API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 256,
+        "help_url": "https://www.alphavantage.co/support/#api-key"
+      }
+    ]
+  }
+}

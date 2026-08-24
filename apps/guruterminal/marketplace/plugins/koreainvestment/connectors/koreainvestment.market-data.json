@@ -1,0 +1,132 @@
+{
+  "id": "koreainvestment.market-data",
+  "name": "Korea Investment Open Trading API",
+  "summary": "All 146 read endpoints for Korean and overseas markets and accounts. Order placement is not included.",
+  "publisher": "Korea Investment & Securities",
+  "data_authority": "Korea Investment & Securities",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "native",
+    "server_id": null,
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "South Korea",
+    "Global"
+  ],
+  "asset_classes": [
+    "Equity",
+    "ETF",
+    "ETN",
+    "ELW",
+    "Bond",
+    "Futures",
+    "Options"
+  ],
+  "capabilities": [
+    "market.quote",
+    "market.order_book",
+    "market.history",
+    "market.reference",
+    "market.analysis",
+    "account.read"
+  ],
+  "freshness": [
+    "Current market query",
+    "Historical"
+  ],
+  "attribution": "Korea Investment & Securities Open Trading API",
+  "terms_url": "https://apiportal.koreainvestment.com/",
+  "permissions": {
+    "network_hosts": [
+      "openapi.koreainvestment.com",
+      "openapivts.koreainvestment.com"
+    ],
+    "credential_kinds": [
+      "app_key",
+      "app_secret",
+      "account_number",
+      "account_product_code",
+      "hts_id"
+    ]
+  },
+  "setup": {
+    "config_fields": [
+      {
+        "id": "environment",
+        "kind": "select",
+        "options": [
+          "real",
+          "demo"
+        ],
+        "label": "Account type",
+        "required": true,
+        "min_length": 4,
+        "max_length": 4,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      }
+    ],
+    "credential_scope_fields": [
+      "environment"
+    ],
+    "credential_fields": [
+      {
+        "id": "app_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "KIS app key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      },
+      {
+        "id": "app_secret",
+        "kind": "api_key",
+        "options": [],
+        "label": "KIS app secret",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      },
+      {
+        "id": "account_number",
+        "kind": "api_key",
+        "options": [],
+        "label": "KIS account number",
+        "required": false,
+        "min_length": 8,
+        "max_length": 8,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      },
+      {
+        "id": "account_product_code",
+        "kind": "api_key",
+        "options": [],
+        "label": "KIS account product code",
+        "required": false,
+        "min_length": 2,
+        "max_length": 2,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      },
+      {
+        "id": "hts_id",
+        "kind": "api_key",
+        "options": [],
+        "label": "KIS HTS ID",
+        "required": false,
+        "min_length": 1,
+        "max_length": 128,
+        "help_url": "https://apiportal.koreainvestment.com/"
+      }
+    ]
+  }
+}

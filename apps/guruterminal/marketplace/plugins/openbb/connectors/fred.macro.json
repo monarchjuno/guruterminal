@@ -1,0 +1,72 @@
+{
+  "id": "fred.macro",
+  "name": "FRED",
+  "summary": "US and international economic series from the St. Louis Fed. Free personal key.",
+  "publisher": "Guru Terminal",
+  "data_authority": "Federal Reserve Bank of St. Louis",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "fred"
+    ],
+    "credential_mapping": {
+      "api_key": "fred_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "economy_fred_series",
+      "arguments": {
+        "symbol": "GDP",
+        "limit": 1,
+        "provider": "fred"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global",
+    "United States"
+  ],
+  "asset_classes": [
+    "Macroeconomic",
+    "Rates"
+  ],
+  "capabilities": [
+    "macro.series"
+  ],
+  "freshness": [
+    "Periodic",
+    "Historical"
+  ],
+  "attribution": "FRED",
+  "terms_url": "https://fred.stlouisfed.org/docs/api/fred/v2/api_key.html",
+  "permissions": {
+    "network_hosts": [
+      "api.stlouisfed.org",
+      "fred.stlouisfed.org"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "FRED API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 256,
+        "help_url": "https://fred.stlouisfed.org/docs/api/api_key.html"
+      }
+    ]
+  }
+}

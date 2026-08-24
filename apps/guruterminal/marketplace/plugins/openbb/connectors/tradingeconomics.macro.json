@@ -1,0 +1,74 @@
+{
+  "id": "tradingeconomics.macro",
+  "name": "Trading Economics",
+  "summary": "Global economic calendars, indicators, forecasts, and markets through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Trading Economics",
+  "kind": "data_source",
+  "free_state": "paid",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "tradingeconomics"
+    ],
+    "credential_mapping": {
+      "api_key": "tradingeconomics_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "economy_calendar",
+      "arguments": {
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-03",
+        "provider": "tradingeconomics"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Macroeconomic",
+    "Rates",
+    "FX",
+    "Commodities"
+  ],
+  "capabilities": [
+    "macro.calendar",
+    "macro.series",
+    "market.forecasts"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Trading Economics via OpenBB",
+  "terms_url": "https://docs.tradingeconomics.com/",
+  "permissions": {
+    "network_hosts": [
+      "api.tradingeconomics.com"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Trading Economics API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://tradingeconomics.com/api/"
+      }
+    ]
+  }
+}

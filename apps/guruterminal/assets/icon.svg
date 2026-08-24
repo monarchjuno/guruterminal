@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#132725"/>
+      <stop offset="1" stop-color="#07110f"/>
+    </linearGradient>
+    <linearGradient id="grove" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c7f36b"/>
+      <stop offset="1" stop-color="#48c997"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M256 90c-79 0-143 64-143 143s64 143 143 143c34 0 65-12 89-32v-99h-102v56h42v24c-9 4-19 6-29 6-54 0-98-44-98-98s44-98 98-98c31 0 58 14 76 37l43-39c-29-38-72-63-119-63Z" fill="url(#grove)"/>
+  <path d="M168 395h176" stroke="#9fe4c7" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="150" cy="395" r="22" fill="#c7f36b"/>
+  <circle cx="362" cy="395" r="22" fill="#48c997"/>
+</svg>

@@ -1,0 +1,7 @@
+potion-base-4M
+Copyright MinishLab contributors
+License: MIT
+https://huggingface.co/minishlab/potion-base-4M
+
+The bundled tokenizer originates from BAAI/bge-base-en-v1.5, also under MIT.
+Weights are loaded from these files only; search does not download models.

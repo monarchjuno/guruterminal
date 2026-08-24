@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/guruterminal-core"
+    ],
+    "resources": {
+      "resources/pi-runtime/": "pi-runtime",
+      "../agent/": "guruterminal-agent",
+      "../../../LICENSE": "LICENSE",
+      "../../../NOTICE": "NOTICE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    }
+  }
+}

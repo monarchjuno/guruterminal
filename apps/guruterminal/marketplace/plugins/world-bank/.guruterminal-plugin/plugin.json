@@ -1,0 +1,17 @@
+{
+  "name": "world-bank",
+  "version": "1.0.0",
+  "description": "Global development and macroeconomic series, straight from the World Bank.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "World Bank",
+    "shortDescription": "Global development and macroeconomic series, straight from the World Bank.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

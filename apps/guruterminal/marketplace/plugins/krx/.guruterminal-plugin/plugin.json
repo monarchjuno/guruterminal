@@ -1,0 +1,17 @@
+{
+  "name": "krx",
+  "version": "1.0.0",
+  "description": "Daily Korean stock prices straight from the exchange.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "KRX",
+    "shortDescription": "Daily Korean stock prices straight from the exchange.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

@@ -1,0 +1,71 @@
+{
+  "id": "bls.macro",
+  "name": "U.S. Bureau of Labor Statistics",
+  "summary": "BLS economic series through OpenBB; a key raises the public API limits.",
+  "publisher": "OpenBB",
+  "data_authority": "U.S. Bureau of Labor Statistics",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "bls"
+    ],
+    "credential_mapping": {
+      "api_key": "bls_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "economy_survey_bls_series",
+      "arguments": {
+        "symbol": "CES0000000001",
+        "start_date": "2024-01-01",
+        "end_date": "2024-02-01",
+        "provider": "bls"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "United States"
+  ],
+  "asset_classes": [
+    "Macroeconomic"
+  ],
+  "capabilities": [
+    "macro.series"
+  ],
+  "freshness": [
+    "Periodic",
+    "Historical"
+  ],
+  "attribution": "U.S. Bureau of Labor Statistics via OpenBB",
+  "terms_url": "https://www.bls.gov/developers/",
+  "permissions": {
+    "network_hosts": [
+      "api.bls.gov",
+      "download.bls.gov"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "BLS API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://data.bls.gov/registrationEngine/"
+      }
+    ]
+  }
+}

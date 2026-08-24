@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research"
+  short_description: "Use when the answer depends on financial facts, valuation, comparison, a thesis challenge, a market move, or a simple historical rule test."
+  default_prompt: "Use $research to produce a source-grounded answer to this financial research question."

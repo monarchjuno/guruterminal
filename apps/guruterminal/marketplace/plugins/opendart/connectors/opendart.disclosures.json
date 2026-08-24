@@ -1,0 +1,62 @@
+{
+  "id": "opendart.disclosures",
+  "name": "OpenDART",
+  "summary": "Korean corporate disclosures and financial statements, straight from the official filing system. Free key.",
+  "publisher": "Guru Terminal",
+  "data_authority": "Financial Supervisory Service",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "native",
+    "server_id": null,
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "South Korea"
+  ],
+  "asset_classes": [
+    "Equity",
+    "Corporate debt"
+  ],
+  "capabilities": [
+    "company.facts",
+    "filing.search",
+    "filing.read",
+    "entity.resolve"
+  ],
+  "freshness": [
+    "Near real-time filings",
+    "Historical"
+  ],
+  "attribution": "OpenDART",
+  "terms_url": "https://opendart.fss.or.kr/guide/main.do",
+  "permissions": {
+    "network_hosts": [
+      "opendart.fss.or.kr"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "OpenDART API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 256,
+        "help_url": "https://opendart.fss.or.kr/uss/umt/EgovMberInsertView.do"
+      }
+    ]
+  }
+}

@@ -1,0 +1,77 @@
+# Rust
+/target/
+
+# Generated artifacts and coverage
+/dist/
+/coverage/
+/output/
+*.profraw
+*.profdata
+*.log
+
+# Local environments and secrets
+/.cargo/
+/.venv/
+*.egg-info/
+/tmp/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+auth.json
+**/auth.json
+credentials.json
+**/.guruterminal/
+*.local
+
+# Incidental maintainer caches
+/_workspace/
+/plan/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+
+# Guru Terminal generated app artifacts (nested paths are not covered by /target)
+/apps/guruterminal/dist/
+/apps/guruterminal/coverage/
+/apps/guruterminal/src-tauri/target/
+/apps/guruterminal/src-tauri/binaries/
+/apps/guruterminal/src-tauri/resources/pi-runtime/
+/apps/guruterminal/python/build/
+/apps/guruterminal/python/dist/
+/apps/guruterminal/python/.venv/
+/apps/guruterminal/.playwright-cli/
+/apps/guruterminal/output/
+/apps/guruterminal/eval/output/
+/apps/guruterminal/e2e/artifacts/
+/apps/guruterminal/*.db
+/apps/guruterminal/*.db-*
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+attachments/
+**/attachments/
+current-session.json
+**/current-session.json
+**/__snapshots__/
+*.snap
+playwright-report/
+test-results/
+blob-report/
+*.dmg
+*.exe
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

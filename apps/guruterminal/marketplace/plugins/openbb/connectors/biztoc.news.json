@@ -1,0 +1,67 @@
+{
+  "id": "biztoc.news",
+  "name": "Biztoc",
+  "summary": "Business and financial news through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Biztoc",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "biztoc"
+    ],
+    "credential_mapping": {
+      "api_key": "biztoc_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "news_world",
+      "arguments": {
+        "limit": 1,
+        "provider": "biztoc"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Multi-asset"
+  ],
+  "capabilities": [
+    "market.news"
+  ],
+  "freshness": [
+    "Current"
+  ],
+  "attribution": "Biztoc via OpenBB",
+  "terms_url": "https://biztoc.com/api",
+  "permissions": {
+    "network_hosts": [
+      "biztoc.p.rapidapi.com"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Biztoc API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://biztoc.com/api"
+      }
+    ]
+  }
+}

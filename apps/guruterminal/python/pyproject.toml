@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guruterminal-finance"
+version = "1.0.0"
+description = "Read-only deterministic finance tool worker for Guru Terminal"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "Guru Terminal contributors" }]
+dependencies = [
+  "pandas==3.0.5",
+  "scipy==1.18.0",
+]
+
+[project.scripts]
+guruterminal-finance = "guruterminal_finance.worker:main"
+
+[dependency-groups]
+dev = [
+  "pyinstaller==6.21.0",
+  "pytest>=8.3,<10",
+  "ruff==0.15.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guruterminal_finance"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.uv]
+package = true

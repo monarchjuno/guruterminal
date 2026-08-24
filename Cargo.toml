@@ -1,0 +1,27 @@
+[package]
+name = "guruterminal-core"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.82"
+description = "Internal memory runtime bundled with the Guru Terminal desktop app"
+license = "AGPL-3.0-only"
+publish = false
+readme = "README.md"
+homepage = "https://github.com/monarchjuno/guruterminal"
+repository = "https://github.com/monarchjuno/guruterminal"
+keywords = ["investment", "research", "knowledge", "agents"]
+categories = ["finance"]
+
+[[bin]]
+name = "guruterminal-core"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+regex = "1"
+model2vec-rs = { version = "0.2.1", default-features = false }
+# Feature unification only: model2vec-rs' fancy-regex feature also enables
+# tokenizers' C++ esaxx backend, which this sidecar does not need.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }

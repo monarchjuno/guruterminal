@@ -1,0 +1,4 @@
+interface:
+  display_name: "Guru Terminal Native E2E"
+  short_description: "Drive the shared native Tauri development window"
+  default_prompt: "Use $guruterminal-native-e2e to inspect or operate the shared Guru Terminal Tauri UI."

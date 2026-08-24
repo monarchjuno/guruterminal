@@ -1,0 +1,61 @@
+{
+  "id": "community.web-research",
+  "name": "Web Research",
+  "summary": "Search the public web and read HTML, PDF, and Office sources. Usable for current research after a page is fetched.",
+  "publisher": "Guru Terminal community integration",
+  "data_authority": "Current Chat provider hosted search, Exa, and original source publishers",
+  "kind": "data_source",
+  "free_state": "keyless",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "native",
+    "server_id": null,
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "preview",
+  "featured": true,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Multi-asset"
+  ],
+  "capabilities": [
+    "web.search",
+    "web.fetch"
+  ],
+  "freshness": [
+    "Current public web"
+  ],
+  "attribution": "Selected search provider and original source publishers",
+  "terms_url": "https://github.com/nicobailon/pi-web-access/tree/v0.24.0",
+  "permissions": {
+    "network_hosts": [
+      "mcp.exa.ai",
+      "*"
+    ],
+    "credential_kinds": []
+  },
+  "setup": {
+    "config_fields": [
+      {
+        "id": "search_policy",
+        "kind": "select",
+        "options": [
+          "automatic",
+          "model_only",
+          "exa_only"
+        ],
+        "label": "Search routing",
+        "required": false,
+        "min_length": 8,
+        "max_length": 10,
+        "help_url": null
+      }
+    ],
+    "credential_fields": []
+  }
+}

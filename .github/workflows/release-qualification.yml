@@ -1,0 +1,365 @@
+name: Guru Terminal Stable Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Stable draft tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      predecessor_tag:
+        description: Published stable or matching RC used for the N-1 to N update
+        required: true
+        type: string
+      macos_update_evidence_url:
+        description: HTTPS evidence for a clean macOS N-1 to N in-app update
+        required: true
+        type: string
+      macos_candidate_set_sha256:
+        description: SHA-256 of candidate SHA256SUMS used by the macOS update test
+        required: true
+        type: string
+      windows_update_evidence_url:
+        description: HTTPS evidence for a clean Windows N-1 to N in-app update
+        required: true
+        type: string
+      windows_candidate_set_sha256:
+        description: SHA-256 of candidate SHA256SUMS used by the Windows update test
+        required: true
+        type: string
+      confirm_macos_update:
+        description: I verified install, in-app update, restart, and retained data on macOS
+        required: true
+        default: false
+        type: boolean
+      confirm_windows_update:
+        description: I verified install, in-app update, restart, and retained data on Windows
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  attestations: read
+
+concurrency:
+  group: guruterminal-qualification-${{ inputs.candidate_tag }}
+  cancel-in-progress: false
+
+jobs:
+  identify:
+    name: Pin draft candidate and qualified predecessor
+    runs-on: ubuntu-latest
+    environment: release-qualification
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      source_commit: ${{ steps.release.outputs.source_commit }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out the candidate tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - id: release
+        name: Require the exact unpublished stable draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          PREDECESSOR_TAG: ${{ inputs.predecessor_tag }}
+          CONFIRM_MACOS: ${{ inputs.confirm_macos_update }}
+          CONFIRM_WINDOWS: ${{ inputs.confirm_windows_update }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$CONFIRM_MACOS" = true
+          test "$CONFIRM_WINDOWS" = true
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = "$CANDIDATE_TAG"
+          LATEST_RESPONSE="$RUNNER_TEMP/latest-release-response.txt"
+          LATEST_ERROR="$RUNNER_TEMP/latest-release-error.txt"
+          set +e
+          gh api --include "/repos/$GITHUB_REPOSITORY/releases/latest" \
+            > "$LATEST_RESPONSE" 2> "$LATEST_ERROR"
+          LATEST_EXIT=$?
+          set -e
+          LATEST_STATUS="$(awk 'NR == 1 { print $2 }' "$LATEST_RESPONSE")"
+          case "$LATEST_STATUS" in
+            200)
+              test "$LATEST_EXIT" -eq 0
+              LATEST_STABLE_TAG="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+              ;;
+            404)
+              test "$LATEST_EXIT" -ne 0
+              LATEST_STABLE_TAG=
+              ;;
+            *)
+              echo "Unexpected GitHub latest-release response: ${LATEST_STATUS:-none}" >&2
+              sed -n '1,5p' "$LATEST_ERROR" >&2
+              exit 1
+              ;;
+          esac
+          gh api --paginate --slurp \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          test "$(git rev-parse "$GITHUB_SHA^{commit}")" = "$SOURCE_COMMIT"
+          python3 - \
+            "$RUNNER_TEMP/release-pages.json" \
+            "$CANDIDATE_TAG" \
+            "$PREDECESSOR_TAG" \
+            "$LATEST_STABLE_TAG" \
+            "$SOURCE_COMMIT" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import re
+          import sys
+
+          pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+              raise SystemExit("paginated releases response is malformed")
+          releases = [release for page in pages for release in page]
+          tag = sys.argv[2]
+          previous_tag = sys.argv[3]
+          latest_stable_tag = sys.argv[4]
+          source_commit = sys.argv[5]
+          matches = [release for release in releases if release["tag_name"] == tag]
+          if len(matches) != 1:
+              raise SystemExit("candidate tag must identify exactly one release")
+          release = matches[0]
+          if not release["draft"] or release["prerelease"] or release["published_at"] is not None:
+              raise SystemExit("stable candidate must remain an unpublished non-prerelease draft")
+          predecessors = [
+              release for release in releases if release["tag_name"] == previous_tag
+          ]
+          if len(predecessors) != 1:
+              raise SystemExit("qualified predecessor must identify exactly one release")
+          predecessor = predecessors[0]
+          if predecessor["draft"] or predecessor["published_at"] is None:
+              raise SystemExit("qualified predecessor must already be published")
+          candidate_base = tag.removeprefix("v")
+          if predecessor["prerelease"]:
+              expected = rf"^v{re.escape(candidate_base)}-rc\.[1-9][0-9]*$"
+              if re.fullmatch(expected, previous_tag) is None:
+                  raise SystemExit("RC predecessor must belong to the stable candidate")
+          elif previous_tag != latest_stable_tag:
+              raise SystemExit("stable predecessor is no longer the Latest release")
+          print(f"release_id={release['id']}")
+          print(f"source_commit={source_commit}")
+          print(f"version={tag.removeprefix('v')}")
+          PY
+
+  platform-preflight:
+    name: ${{ matrix.name }} signed package preflight
+    needs: identify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            platform: macos
+            asset: GuruTerminal-macOS-arm64.dmg
+          - name: Windows x64
+            os: windows-latest
+            platform: windows
+            asset: GuruTerminal-Windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out the candidate tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Download the draft candidate without changing it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        run: gh release download "$CANDIDATE_TAG" --dir candidate-assets
+
+      - name: Verify closed asset manifest and provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.identify.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.identify.outputs.source_commit }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          python apps/guruterminal/scripts/verify-release-assets.py \
+            --version "$RELEASE_VERSION" \
+            --tag "$CANDIDATE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$SOURCE_COMMIT" \
+            --assets candidate-assets
+          apps/guruterminal/scripts/verify-release-attestations.sh \
+            candidate-assets \
+            "$GITHUB_REPOSITORY" \
+            "$SOURCE_COMMIT" \
+            "refs/tags/$CANDIDATE_TAG"
+
+      - name: Verify macOS signature, notarization, and mounted identity
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.identify.outputs.version }}
+        run: |
+          set -euo pipefail
+          DMG="candidate-assets/GuruTerminal-macOS-arm64.dmg"
+          hdiutil verify "$DMG" >/dev/null
+          codesign --verify --strict --verbose=2 "$DMG"
+          xcrun stapler validate "$DMG"
+          MOUNT_DIR="$(mktemp -d "$RUNNER_TEMP/guruterminal-candidate.XXXXXX")"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
+          APP="$MOUNT_DIR/Guru Terminal.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" = "$RELEASE_VERSION"
+          hdiutil detach "$MOUNT_DIR" >/dev/null
+          rmdir "$MOUNT_DIR"
+
+      - name: Verify Windows Authenticode signature
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        timeout-minutes: 20
+        env:
+          RELEASE_VERSION: ${{ needs.identify.outputs.version }}
+        run: |
+          $installer = "candidate-assets\GuruTerminal-Windows-x64.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Candidate Authenticode verification failed: $($signature.StatusMessage)"
+          }
+          & apps/guruterminal/scripts/check-windows-installer.ps1 `
+            -Installer $installer `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -RequireDistributionSigning
+          if ($LASTEXITCODE -ne 0) {
+            throw "Candidate NSIS package inspection failed."
+          }
+
+      - name: Record the native-tested candidate set
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qualification-digest
+          python apps/guruterminal/scripts/release-qualification.py digest \
+            --release-metadata candidate-assets/RELEASE-METADATA.json \
+            > "qualification-digest/${{ matrix.platform }}.sha256"
+
+      - name: Upload native candidate-set digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: guruterminal-native-candidate-${{ matrix.platform }}
+          path: qualification-digest/${{ matrix.platform }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  receipt:
+    name: Seal qualification evidence
+    needs:
+      - identify
+      - platform-preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the candidate tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Download the same draft candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        run: gh release download "$CANDIDATE_TAG" --dir candidate-assets
+
+      - name: Download native candidate-set digests
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: guruterminal-native-candidate-*
+          path: qualification-digests
+          merge-multiple: true
+
+      - name: Reverify the exact candidate tested on both native platforms
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          RELEASE_VERSION: ${{ needs.identify.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.identify.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python3 apps/guruterminal/scripts/verify-release-assets.py \
+            --version "$RELEASE_VERSION" \
+            --tag "$CANDIDATE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$SOURCE_COMMIT" \
+            --assets candidate-assets
+          apps/guruterminal/scripts/verify-release-attestations.sh \
+            candidate-assets \
+            "$GITHUB_REPOSITORY" \
+            "$SOURCE_COMMIT" \
+            "refs/tags/$CANDIDATE_TAG"
+          CANDIDATE_SET_SHA256="$(
+            python3 apps/guruterminal/scripts/release-qualification.py digest \
+              --release-metadata candidate-assets/RELEASE-METADATA.json
+          )"
+          grep -Fqx "$CANDIDATE_SET_SHA256" qualification-digests/macos.sha256
+          grep -Fqx "$CANDIDATE_SET_SHA256" qualification-digests/windows.sha256
+
+      - name: Write qualification receipt
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          PREDECESSOR_TAG: ${{ inputs.predecessor_tag }}
+          MACOS_EVIDENCE_URL: ${{ inputs.macos_update_evidence_url }}
+          MACOS_CANDIDATE_SET_SHA256: ${{ inputs.macos_candidate_set_sha256 }}
+          WINDOWS_EVIDENCE_URL: ${{ inputs.windows_update_evidence_url }}
+          WINDOWS_CANDIDATE_SET_SHA256: ${{ inputs.windows_candidate_set_sha256 }}
+          SOURCE_COMMIT: ${{ needs.identify.outputs.source_commit }}
+          RELEASE_ID: ${{ needs.identify.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          python3 apps/guruterminal/scripts/release-qualification.py write \
+            --candidate-tag "$CANDIDATE_TAG" \
+            --previous-tag "$PREDECESSOR_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$SOURCE_COMMIT" \
+            --release-id "$RELEASE_ID" \
+            --release-metadata candidate-assets/RELEASE-METADATA.json \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --macos-evidence-url "$MACOS_EVIDENCE_URL" \
+            --macos-candidate-set-sha256 "$MACOS_CANDIDATE_SET_SHA256" \
+            --windows-evidence-url "$WINDOWS_EVIDENCE_URL" \
+            --windows-candidate-set-sha256 "$WINDOWS_CANDIDATE_SET_SHA256" \
+            --output qualification/qualification.json
+
+      - name: Upload qualification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: guruterminal-stable-qualification-${{ inputs.candidate_tag }}
+          path: qualification/qualification.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The renderer can call only Guru Terminal's typed Rust commands.",
+  "webviews": ["main"],
+  "permissions": [
+    "core:event:default",
+    "core:resources:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "web-research",
+  "version": "1.0.0",
+  "description": "Search the public web and read HTML, PDF, and Office sources.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "Web Research",
+    "shortDescription": "Search the public web and read HTML, PDF, and Office sources.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

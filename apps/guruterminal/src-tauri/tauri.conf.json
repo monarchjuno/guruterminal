@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Guru Terminal",
+  "version": "0.0.1",
+  "identifier": "com.monarchjuno.guruterminal",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Guru Terminal",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 700,
+        "minHeight": 560,
+        "resizable": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 12, "y": 22 }
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": ["dmg", "nsis"],
+    "category": "Finance",
+    "publisher": "Guru Terminal",
+    "homepage": "https://github.com/monarchjuno/guruterminal",
+    "shortDescription": "Build an investment Guru that shows its work",
+    "longDescription": "Guru Terminal is a local-first research desktop for investors. Build a Guru that reads primary filings, runs its own valuation math, and keeps every source and judgment as plain Markdown on your machine. It runs on your own API key, with no account and no sync.",
+    "macOS": {
+      "bundleVersion": "1",
+      "minimumSystemVersion": "13.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "Korean"]
+      }
+    }
+  }
+}

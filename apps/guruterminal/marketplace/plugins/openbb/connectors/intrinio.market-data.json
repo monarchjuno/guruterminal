@@ -1,0 +1,73 @@
+{
+  "id": "intrinio.market-data",
+  "name": "Intrinio",
+  "summary": "Market prices, fundamentals, and estimates through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Intrinio",
+  "kind": "data_source",
+  "free_state": "paid",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "intrinio"
+    ],
+    "credential_mapping": {
+      "api_key": "intrinio_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "equity_price_quote",
+      "arguments": {
+        "symbol": "AAPL",
+        "provider": "intrinio"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Equity",
+    "ETF",
+    "Options"
+  ],
+  "capabilities": [
+    "market.quote",
+    "market.history",
+    "company.fundamentals",
+    "company.analyst"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Intrinio via OpenBB",
+  "terms_url": "https://docs.intrinio.com/documentation/api_v2/getting_started",
+  "permissions": {
+    "network_hosts": [
+      "api-v2.intrinio.com"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Intrinio API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://intrinio.com/"
+      }
+    ]
+  }
+}

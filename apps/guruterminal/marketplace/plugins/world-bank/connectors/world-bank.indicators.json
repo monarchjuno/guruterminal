@@ -1,0 +1,41 @@
+{
+  "id": "world-bank.indicators",
+  "name": "World Bank Indicators",
+  "summary": "Global development and macroeconomic series, straight from the World Bank. No account needed.",
+  "publisher": "Guru Terminal",
+  "data_authority": "World Bank",
+  "kind": "data_source",
+  "free_state": "keyless",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "native",
+    "server_id": null,
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Macroeconomic"
+  ],
+  "capabilities": [
+    "macro.series"
+  ],
+  "freshness": [
+    "Periodic",
+    "Historical"
+  ],
+  "attribution": "World Bank",
+  "terms_url": "https://datahelpdesk.worldbank.org/knowledgebase/articles/889392",
+  "permissions": {
+    "network_hosts": [
+      "api.worldbank.org"
+    ],
+    "credential_kinds": []
+  }
+}

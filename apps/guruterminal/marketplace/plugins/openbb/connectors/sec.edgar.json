@@ -1,0 +1,75 @@
+{
+  "id": "sec.edgar",
+  "name": "SEC EDGAR",
+  "summary": "US company facts and filings, read straight from the SEC. Needs only a contact email.",
+  "publisher": "Guru Terminal",
+  "data_authority": "U.S. Securities and Exchange Commission",
+  "kind": "data_source",
+  "free_state": "keyless",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "sec"
+    ],
+    "credential_mapping": {},
+    "config_mapping": {
+      "contact_email": "sec_contact_email"
+    },
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "United States"
+  ],
+  "asset_classes": [
+    "Equity",
+    "Corporate debt"
+  ],
+  "capabilities": [
+    "company.facts",
+    "filing.search",
+    "filing.read",
+    "entity.resolve"
+  ],
+  "freshness": [
+    "Historical company facts",
+    "Current submissions window"
+  ],
+  "attribution": "SEC EDGAR",
+  "terms_url": "https://www.sec.gov/about/developer-resources",
+  "permissions": {
+    "network_hosts": [
+      "data.sec.gov",
+      "efts.sec.gov",
+      "sec.gov",
+      "www.hmrc.gov.uk",
+      "www.sec.gov",
+      "www.w3.org",
+      "www.xbrl.org",
+      "xbrl.fasb.org",
+      "xbrl.frc.org.uk",
+      "xbrl.ifrs.org",
+      "xbrl.org",
+      "xbrl.sec.gov"
+    ],
+    "credential_kinds": []
+  },
+  "setup": {
+    "config_fields": [
+      {
+        "id": "contact_email",
+        "kind": "email",
+        "options": [],
+        "label": "SEC contact email",
+        "required": true,
+        "min_length": 3,
+        "max_length": 254,
+        "help_url": "https://www.sec.gov/about/developer-resources"
+      }
+    ],
+    "credential_fields": []
+  }
+}

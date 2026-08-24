@@ -1,0 +1,74 @@
+{
+  "id": "eia.energy",
+  "name": "U.S. Energy Information Administration",
+  "summary": "Official U.S. energy statistics and outlooks through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "U.S. Energy Information Administration",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "eia"
+    ],
+    "credential_mapping": {
+      "api_key": "eia_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "commodity_short_term_energy_outlook",
+      "arguments": {
+        "start_date": "2024-01-01",
+        "end_date": "2024-02-01",
+        "provider": "eia"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "United States",
+    "Global"
+  ],
+  "asset_classes": [
+    "Commodities",
+    "Macroeconomic"
+  ],
+  "capabilities": [
+    "commodity.energy",
+    "macro.series"
+  ],
+  "freshness": [
+    "Periodic",
+    "Historical"
+  ],
+  "attribution": "U.S. EIA via OpenBB",
+  "terms_url": "https://www.eia.gov/opendata/",
+  "permissions": {
+    "network_hosts": [
+      "api.eia.gov",
+      "ir.eia.gov",
+      "www.eia.gov"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "EIA API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://www.eia.gov/opendata/register.php"
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "openbb",
+  "version": "1.0.0",
+  "description": "Read-only market, company, filings, and macro data through the bundled OpenBB MCP runtime.",
+  "author": {
+    "name": "OpenBB"
+  },
+  "interface": {
+    "displayName": "OpenBB",
+    "shortDescription": "Read-only market, company, filings, and macro data through the bundled OpenBB MCP runtime.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/",
+  "mcpServers": "./.mcp.json"
+}

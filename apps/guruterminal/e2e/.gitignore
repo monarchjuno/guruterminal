@@ -1,0 +1,13 @@
+artifacts/
+node_modules/
+current-session.json
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+auth.json
+*.log

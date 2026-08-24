@@ -1,0 +1,17 @@
+{
+  "name": "guruterminal-finance",
+  "version": "1.0.0",
+  "description": "Thirteen valuation and risk calculations, from DCF and its sensitivity to IRR and WACC, run offline on this device.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "Finance Core",
+    "shortDescription": "Thirteen valuation and risk calculations, from DCF and its sensitivity to IRR and WACC, run offline on this device.",
+    "category": "Local",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

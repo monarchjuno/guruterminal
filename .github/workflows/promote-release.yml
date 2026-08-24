@@ -1,0 +1,208 @@
+name: Guru Terminal Stable Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Qualified draft tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      qualification_run_id:
+        description: Successful Stable Qualification workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  attestations: read
+  contents: write
+
+concurrency:
+  group: guruterminal-stable-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Publish qualified bytes to the stable feed
+    runs-on: ubuntu-latest
+    environment: stable-release
+    steps:
+      - name: Check out the immutable candidate tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - id: candidate
+        name: Pin the draft release and qualification run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          gh api --paginate --slurp \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" > "$RUNNER_TEMP/qualification-run.json"
+          python3 - \
+            "$RUNNER_TEMP/release-pages.json" \
+            "$RUNNER_TEMP/qualification-run.json" \
+            "$CANDIDATE_TAG" \
+            "$GITHUB_REPOSITORY" \
+            "$SOURCE_COMMIT" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+              raise SystemExit("paginated releases response is malformed")
+          releases = [release for page in pages for release in page]
+          run = json.load(open(sys.argv[2], encoding="utf-8"))
+          tag, repository, source_commit = sys.argv[3:]
+          matches = [release for release in releases if release["tag_name"] == tag]
+          if len(matches) != 1:
+              raise SystemExit("candidate tag must identify exactly one release")
+          release = matches[0]
+          if not release["draft"] or release["prerelease"] or release["published_at"] is not None:
+              raise SystemExit("candidate is no longer an unpublished stable draft")
+          if (
+              run["event"] != "workflow_dispatch"
+              or run["conclusion"] != "success"
+              or run["path"] != ".github/workflows/release-qualification.yml"
+              or run["head_repository"]["full_name"] != repository
+              or run["head_sha"] != source_commit
+          ):
+              raise SystemExit("qualification run identity or conclusion is invalid")
+          print(f"release_id={release['id']}")
+          print(f"source_commit={source_commit}")
+          print(f"version={tag.removeprefix('v')}")
+          PY
+
+      - name: Download candidate and sealed qualification receipt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: |
+          set -euo pipefail
+          gh release download "$CANDIDATE_TAG" --dir candidate-assets
+          gh run download "$QUALIFICATION_RUN_ID" \
+            --name "guruterminal-stable-qualification-$CANDIDATE_TAG" \
+            --dir qualification
+
+      - name: Revalidate bytes, provenance, and N-1 to N evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          RELEASE_VERSION: ${{ steps.candidate.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.candidate.outputs.source_commit }}
+          RELEASE_ID: ${{ steps.candidate.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          python3 apps/guruterminal/scripts/verify-release-assets.py \
+            --version "$RELEASE_VERSION" \
+            --tag "$CANDIDATE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$SOURCE_COMMIT" \
+            --assets candidate-assets
+          python3 apps/guruterminal/scripts/release-qualification.py verify \
+            --candidate-tag "$CANDIDATE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-commit "$SOURCE_COMMIT" \
+            --release-id "$RELEASE_ID" \
+            --release-metadata candidate-assets/RELEASE-METADATA.json \
+            --workflow-run-id "$QUALIFICATION_RUN_ID" \
+            --receipt qualification/qualification.json
+          PREDECESSOR_TAG="$(python3 -c 'import json; print(json.load(open("qualification/qualification.json"))["qualified_predecessor_tag"])')"
+          LATEST_RESPONSE="$RUNNER_TEMP/latest-release-response.txt"
+          LATEST_ERROR="$RUNNER_TEMP/latest-release-error.txt"
+          set +e
+          gh api --include "/repos/$GITHUB_REPOSITORY/releases/latest" \
+            > "$LATEST_RESPONSE" 2> "$LATEST_ERROR"
+          LATEST_EXIT=$?
+          set -e
+          LATEST_STATUS="$(awk 'NR == 1 { print $2 }' "$LATEST_RESPONSE")"
+          case "$LATEST_STATUS" in
+            200)
+              test "$LATEST_EXIT" -eq 0
+              LATEST_STABLE_TAG="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+              ;;
+            404)
+              test "$LATEST_EXIT" -ne 0
+              LATEST_STABLE_TAG=
+              ;;
+            *)
+              echo "Unexpected GitHub latest-release response: ${LATEST_STATUS:-none}" >&2
+              sed -n '1,5p' "$LATEST_ERROR" >&2
+              exit 1
+              ;;
+          esac
+          gh api --paginate --slurp \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages-before-promotion.json"
+          python3 - \
+            "$RUNNER_TEMP/release-pages-before-promotion.json" \
+            "$CANDIDATE_TAG" \
+            "$PREDECESSOR_TAG" \
+            "$LATEST_STABLE_TAG" <<'PY'
+          import json
+          import re
+          import sys
+
+          pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+              raise SystemExit("paginated releases response is malformed")
+          releases = [release for page in pages for release in page]
+          candidate_tag, predecessor_tag, latest_stable_tag = sys.argv[2:]
+          matches = [
+              release for release in releases
+              if release["tag_name"] == predecessor_tag
+          ]
+          if len(matches) != 1 or matches[0]["draft"] or matches[0]["published_at"] is None:
+              raise SystemExit("qualified predecessor is no longer published")
+          if matches[0]["prerelease"]:
+              candidate_base = candidate_tag.removeprefix("v")
+              if re.fullmatch(
+                  rf"v{re.escape(candidate_base)}-rc\.[1-9][0-9]*",
+                  predecessor_tag,
+              ) is None:
+                  raise SystemExit("qualified RC no longer matches the candidate")
+          elif predecessor_tag != latest_stable_tag:
+              raise SystemExit("qualified stable predecessor is no longer Latest")
+          PY
+          apps/guruterminal/scripts/verify-release-attestations.sh \
+            candidate-assets \
+            "$GITHUB_REPOSITORY" \
+            "$SOURCE_COMMIT" \
+            "refs/tags/$CANDIDATE_TAG"
+
+      - name: Publish the draft as Latest without rebuilding or uploading
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          RELEASE_ID: ${{ steps.candidate.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft)" = true
+          gh release edit "$CANDIDATE_TAG" --draft=false --latest
+          test "$(gh release view "$CANDIDATE_TAG" --json isDraft --jq .isDraft)" = false
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$CANDIDATE_TAG"
+          apps/guruterminal/scripts/verify-published-release.sh "$CANDIDATE_TAG"

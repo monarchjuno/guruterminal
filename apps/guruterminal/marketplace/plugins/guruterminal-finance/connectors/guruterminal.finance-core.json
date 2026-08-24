@@ -1,0 +1,51 @@
+{
+  "id": "guruterminal.finance-core",
+  "name": "Finance Core",
+  "summary": "Thirteen valuation and risk calculations, from DCF and its sensitivity to IRR and WACC, run offline on this device.",
+  "publisher": "Guru Terminal",
+  "data_authority": "Guru Terminal",
+  "kind": "analysis_tool",
+  "free_state": "keyless",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "local_worker",
+    "server_id": null,
+    "worker_id": "finance-worker",
+    "provider_ids": [],
+    "credential_mapping": {},
+    "config_mapping": {},
+    "verification_probe": null
+  },
+  "release_stage": "available",
+  "featured": true,
+  "markets": [
+    "Global"
+  ],
+  "asset_classes": [
+    "Multi-asset"
+  ],
+  "capabilities": [
+    "calculate.percentage_change",
+    "calculate.ratio",
+    "calculate.compound_annual_growth_rate",
+    "calculate.discounted_cash_flow",
+    "calculate.series_statistics",
+    "calculate.internal_rate_of_return",
+    "calculate.weighted_average_cost_of_capital",
+    "calculate.enterprise_value_bridge",
+    "calculate.period_aggregate",
+    "calculate.currency_convert",
+    "calculate.dcf_sensitivity",
+    "calculate.risk_metrics",
+    "calculate.point_in_time_filter"
+  ],
+  "freshness": [
+    "Deterministic"
+  ],
+  "attribution": "Guru Terminal",
+  "terms_url": null,
+  "permissions": {
+    "network_hosts": [],
+    "credential_kinds": []
+  }
+}

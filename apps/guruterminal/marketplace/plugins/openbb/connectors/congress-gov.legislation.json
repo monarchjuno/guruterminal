@@ -1,0 +1,70 @@
+{
+  "id": "congress-gov.legislation",
+  "name": "Congress.gov",
+  "summary": "U.S. legislation and congressional data through the bundled OpenBB runtime.",
+  "publisher": "OpenBB",
+  "data_authority": "Library of Congress",
+  "kind": "data_source",
+  "free_state": "free_account",
+  "trust": "first_party",
+  "runtime": {
+    "kind": "mcp",
+    "server_id": "openbb",
+    "provider_ids": [
+      "congress_gov"
+    ],
+    "credential_mapping": {
+      "api_key": "congress_gov_api_key"
+    },
+    "config_mapping": {},
+    "verification_probe": {
+      "tool_name": "uscongress_bills",
+      "arguments": {
+        "provider": "congress_gov"
+      }
+    }
+  },
+  "release_stage": "available",
+  "featured": false,
+  "markets": [
+    "United States"
+  ],
+  "asset_classes": [
+    "Multi-asset"
+  ],
+  "capabilities": [
+    "government.legislation"
+  ],
+  "freshness": [
+    "Current",
+    "Historical"
+  ],
+  "attribution": "Congress.gov via OpenBB",
+  "terms_url": "https://api.congress.gov/",
+  "permissions": {
+    "network_hosts": [
+      "api.congress.gov",
+      "unitedstates.github.io",
+      "www.congress.gov",
+      "www.govinfo.gov"
+    ],
+    "credential_kinds": [
+      "api_key"
+    ]
+  },
+  "setup": {
+    "config_fields": [],
+    "credential_fields": [
+      {
+        "id": "api_key",
+        "kind": "api_key",
+        "options": [],
+        "label": "Congress.gov API key",
+        "required": true,
+        "min_length": 8,
+        "max_length": 512,
+        "help_url": "https://api.congress.gov/sign-up/"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "koreainvestment",
+  "version": "1.0.0",
+  "description": "Read-only Korean and overseas market and account endpoints. Order placement is not included.",
+  "author": {
+    "name": "Korea Investment & Securities"
+  },
+  "interface": {
+    "displayName": "Korea Investment",
+    "shortDescription": "Read-only Korean and overseas market and account endpoints. Order placement is not included.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

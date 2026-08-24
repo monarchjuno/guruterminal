@@ -1,0 +1,17 @@
+{
+  "name": "opendart",
+  "version": "1.0.0",
+  "description": "Korean corporate disclosures and financial statements from the official filing system.",
+  "author": {
+    "name": "Guru Terminal"
+  },
+  "interface": {
+    "displayName": "OpenDART",
+    "shortDescription": "Korean corporate disclosures and financial statements from the official filing system.",
+    "category": "Data",
+    "capabilities": [
+      "Read"
+    ]
+  },
+  "connectors": "./connectors/"
+}

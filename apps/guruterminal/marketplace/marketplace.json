@@ -1,0 +1,101 @@
+{
+  "schema_version": "guruterminal-marketplace/1",
+  "name": "guruterminal-official",
+  "interface": {
+    "displayName": "Guru Terminal"
+  },
+  "plugins": [
+    {
+      "name": "guruterminal-compute",
+      "source": {
+        "source": "local",
+        "path": "./plugins/guruterminal-compute"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT"
+      },
+      "category": "Local"
+    },
+    {
+      "name": "guruterminal-finance",
+      "source": {
+        "source": "local",
+        "path": "./plugins/guruterminal-finance"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT"
+      },
+      "category": "Local"
+    },
+    {
+      "name": "openbb",
+      "source": {
+        "source": "local",
+        "path": "./plugins/openbb"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Data"
+    },
+    {
+      "name": "world-bank",
+      "source": {
+        "source": "local",
+        "path": "./plugins/world-bank"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT"
+      },
+      "category": "Data"
+    },
+    {
+      "name": "opendart",
+      "source": {
+        "source": "local",
+        "path": "./plugins/opendart"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Data"
+    },
+    {
+      "name": "krx",
+      "source": {
+        "source": "local",
+        "path": "./plugins/krx"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Data"
+    },
+    {
+      "name": "koreainvestment",
+      "source": {
+        "source": "local",
+        "path": "./plugins/koreainvestment"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Data"
+    },
+    {
+      "name": "web-research",
+      "source": {
+        "source": "local",
+        "path": "./plugins/web-research"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT"
+      },
+      "category": "Data"
+    }
+  ]
+}
