@@ -133,6 +133,18 @@ fi
 WEBDRIVER_PORT=$("$NODE_BINARY" "$SCRIPT_DIR/wait-session.mjs" --resolve-port "$WEBDRIVER_PORT")
 export TAURI_WEBDRIVER_PORT="$WEBDRIVER_PORT"
 
+E2E_STARTUP_TIMEOUT_MS=${GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS:-300000}
+case "$E2E_STARTUP_TIMEOUT_MS" in
+    *[!0-9]*|'')
+        echo "GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS must be a positive integer." >&2
+        exit 1
+        ;;
+esac
+if [ "$E2E_STARTUP_TIMEOUT_MS" -le 0 ]; then
+    echo "GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS must be a positive integer." >&2
+    exit 1
+fi
+
 echo "Guru Terminal E2E profile: com.monarchjuno.guruterminal.e2e"
 echo "Guru Terminal E2E state: $E2E_APP_DATA_DIR"
 echo "Guru Terminal E2E WebDriver: http://127.0.0.1:$WEBDRIVER_PORT"
@@ -176,7 +188,8 @@ APP_PID=$!
 if ! "$NODE_BINARY" "$SCRIPT_DIR/wait-session.mjs" \
     --wait-owned \
     --pid "$APP_PID" \
-    --port "$WEBDRIVER_PORT"; then
+    --port "$WEBDRIVER_PORT" \
+    --timeout-ms "$E2E_STARTUP_TIMEOUT_MS"; then
     echo "Guru Terminal E2E WebDriver did not become ready." >&2
     exit 1
 fi

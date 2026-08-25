@@ -8,9 +8,21 @@ IMPORT_ROOT="$SCRIPT_DIR/fixtures/Imported Memory E2E"
 STATE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/guruterminal-persistence-e2e.XXXXXX")
 RUN_LOG=$(mktemp "${TMPDIR:-/tmp}/guruterminal-persistence-log.XXXXXX")
 APP_PID=
+E2E_STARTUP_TIMEOUT_MS=${GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS:-300000}
 
 if [ ! -d "$IMPORT_ROOT" ] || [ -L "$IMPORT_ROOT" ]; then
     echo "Native Memory import fixture is missing or invalid: $IMPORT_ROOT" >&2
+    exit 1
+fi
+
+case "$E2E_STARTUP_TIMEOUT_MS" in
+    *[!0-9]*|'')
+        echo "GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS must be a positive integer." >&2
+        exit 1
+        ;;
+esac
+if [ "$E2E_STARTUP_TIMEOUT_MS" -le 0 ]; then
+    echo "GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS must be a positive integer." >&2
     exit 1
 fi
 
@@ -78,7 +90,10 @@ run_phase() {
         "$SCRIPT_DIR/run-app.sh" >"$RUN_LOG" 2>&1 &
     APP_PID=$!
 
-    if ! node "$SCRIPT_DIR/wait-session.mjs" --pid "$APP_PID" --session "$SESSION_INFO"; then
+    if ! node "$SCRIPT_DIR/wait-session.mjs" \
+        --pid "$APP_PID" \
+        --session "$SESSION_INFO" \
+        --timeout-ms "$E2E_STARTUP_TIMEOUT_MS"; then
         cat "$RUN_LOG" >&2
         echo "Guru Terminal exited before persistence phase $phase was ready." >&2
         exit 1

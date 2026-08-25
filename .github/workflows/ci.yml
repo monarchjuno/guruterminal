@@ -107,6 +107,9 @@ jobs:
         working-directory: apps/guruterminal/e2e
         env:
           GURUTERMINAL_E2E_REQUIRE_STAGED_RUNTIMES: "1"
+          # A fresh macOS runner must compile the Tauri test binary before its
+          # WebDriver endpoint can bind. Local runs retain the five-minute default.
+          GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS: "600000"
         run: |
           npm run test:native:full
           npm run test:persistence
