@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -812,6 +813,28 @@ enum ChatLoopInput {
     PiEvent(PiEventReceive),
 }
 
+async fn receive_expired_watchdog_input(
+    mut first_provider_body_progress_timer: Pin<&mut tokio::time::Sleep>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    chat_controls: &mut ChatControlReceiver,
+    pi_events: &mut tokio::sync::broadcast::Receiver<PiEvent>,
+    watchdog_expiry_event_deferrals: &mut usize,
+) -> ChatLoopInput {
+    // Only at an expired watchdog boundary, Pi may already have queued
+    // `compaction_start`. Prefer that bounded protocol work before failing;
+    // normal streaming stays on the fair select in the chat loop.
+    tokio::select! {
+        biased;
+        changed = cancel.changed() => ChatLoopInput::CancelChanged(changed),
+        event = pi_events.recv() => {
+            *watchdog_expiry_event_deferrals += 1;
+            ChatLoopInput::PiEvent(event)
+        },
+        _ = first_provider_body_progress_timer.as_mut() => ChatLoopInput::WatchdogElapsed,
+        control = chat_controls.recv() => ChatLoopInput::Control(control),
+    }
+}
+
 fn take_queued_pi_event_after_watchdog_expiry(
     pi_events: &mut tokio::sync::broadcast::Receiver<PiEvent>,
     expiry_event_deferrals: &mut usize,
@@ -1009,6 +1032,94 @@ mod first_provider_body_watchdog_tests {
             watchdog.select_mode(body_deadline, 0),
             FirstProviderBodyWatchdogSelectMode::Fair
         );
+    }
+
+    #[tokio::test]
+    async fn expired_watchdog_selects_a_queued_compaction_before_its_elapsed_timer() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let body_deadline = started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
+        let pre_body_deadline = started + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+        let (_cancel_sender, mut cancel) = tokio::sync::watch::channel(false);
+        let (_control_handle, mut chat_controls) = chat_control_channel();
+        let (pi_event_sender, mut pi_events) = tokio::sync::broadcast::channel(1);
+        pi_event_sender
+            .send(PiEvent::Rpc {
+                payload: serde_json::json!({"type": "compaction_start"}),
+            })
+            .unwrap();
+        let timer = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(timer);
+        let mut deferrals = 0;
+
+        assert_eq!(
+            watchdog.select_mode(body_deadline, deferrals),
+            FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent
+        );
+        let input = receive_expired_watchdog_input(
+            timer.as_mut(),
+            &mut cancel,
+            &mut chat_controls,
+            &mut pi_events,
+            &mut deferrals,
+        )
+        .await;
+
+        match input {
+            ChatLoopInput::PiEvent(Ok(PiEvent::Rpc { payload })) => {
+                assert_eq!(
+                    payload.get("type").and_then(Value::as_str),
+                    Some("compaction_start")
+                );
+            }
+            _ => panic!("the queued compaction must win over the elapsed watchdog timer"),
+        }
+        assert_eq!(deferrals, 1);
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.select_mode(body_deadline, deferrals),
+            FirstProviderBodyWatchdogSelectMode::Fair
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_watchdog_cancellation_wins_before_a_queued_compaction() {
+        let started = Instant::now();
+        let watchdog = FirstProviderBodyWatchdog::new(started);
+        let body_deadline = started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
+        let (cancel_sender, mut cancel) = tokio::sync::watch::channel(false);
+        let (_control_handle, mut chat_controls) = chat_control_channel();
+        let (pi_event_sender, mut pi_events) = tokio::sync::broadcast::channel(1);
+        pi_event_sender
+            .send(PiEvent::Rpc {
+                payload: serde_json::json!({"type": "compaction_start"}),
+            })
+            .unwrap();
+        cancel_sender.send(true).unwrap();
+        let timer = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(timer);
+        let mut deferrals = 0;
+
+        assert_eq!(
+            watchdog.select_mode(body_deadline, deferrals),
+            FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent
+        );
+        let input = receive_expired_watchdog_input(
+            timer.as_mut(),
+            &mut cancel,
+            &mut chat_controls,
+            &mut pi_events,
+            &mut deferrals,
+        )
+        .await;
+
+        assert!(matches!(input, ChatLoopInput::CancelChanged(Ok(()))));
+        assert!(*cancel.borrow());
+        assert_eq!(deferrals, 0, "cancellation must not consume the Pi event");
+        assert!(matches!(
+            pi_events.try_recv(),
+            Ok(PiEvent::Rpc { payload }) if payload.get("type").and_then(Value::as_str) == Some("compaction_start")
+        ));
     }
 
     #[test]
@@ -2149,19 +2260,14 @@ pub async fn chat_send(
                     }
                 }
                 FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent => {
-                    // Only at an expired watchdog boundary, Pi may already have
-                    // queued `compaction_start`. Prefer that bounded protocol
-                    // work before failing; normal streaming stays fair above.
-                    tokio::select! {
-                        biased;
-                        changed = cancel.changed() => ChatLoopInput::CancelChanged(changed),
-                        event = pi_events.recv() => {
-                            watchdog_expiry_event_deferrals += 1;
-                            ChatLoopInput::PiEvent(event)
-                        },
-                        _ = &mut first_provider_body_progress_timer, if first_provider_body_watchdog.is_active() => ChatLoopInput::WatchdogElapsed,
-                        control = chat_controls.recv() => ChatLoopInput::Control(control),
-                    }
+                    receive_expired_watchdog_input(
+                        first_provider_body_progress_timer.as_mut(),
+                        &mut cancel,
+                        &mut chat_controls,
+                        &mut pi_events,
+                        &mut watchdog_expiry_event_deferrals,
+                    )
+                    .await
                 }
                 FirstProviderBodyWatchdogSelectMode::Timeout => {
                     unreachable!("handled before select")
