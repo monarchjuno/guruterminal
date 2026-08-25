@@ -15,8 +15,9 @@ use thiserror::Error;
 
 #[cfg(windows)]
 use crate::windows_fs::{
-    add_open_reparse_point_flag, ensure_no_reparse_points, filesystem_identity,
-    metadata_is_reparse, open_directory_no_reparse, open_parent_directories_no_reparse,
+    add_open_reparse_point_flag, add_open_reparse_point_flag_with_read_write_share,
+    ensure_no_reparse_points, filesystem_identity, metadata_is_reparse, open_directory_no_reparse,
+    open_parent_directories_no_reparse, reopen_regular_no_reparse_for_identity,
 };
 #[cfg(all(not(debug_assertions), windows))]
 use crate::windows_fs::{authenticode_signer_certificate, open_regular_no_reparse};
@@ -106,7 +107,7 @@ pub(crate) fn ensure_private_regular_file(path: &Path) -> Result<(), ArtifactTru
         .mode(0o600)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     #[cfg(windows)]
-    add_open_reparse_point_flag(&mut options);
+    add_open_reparse_point_flag_with_read_write_share(&mut options);
     let file = options.open(path)?;
     if !file.metadata()?.is_file() || metadata_is_untrusted(&file.metadata()?) {
         return Err(ArtifactTrustError::Untrusted);
@@ -287,10 +288,7 @@ fn reject_changed_path(
         let reopened = if expect_directory {
             open_directory_no_reparse(path)?
         } else {
-            let mut options = OpenOptions::new();
-            options.read(true);
-            add_open_reparse_point_flag(&mut options);
-            options.open(path)?
+            reopen_regular_no_reparse_for_identity(path)?
         };
         if filesystem_identity(opened)? != filesystem_identity(&reopened)? {
             return Err(ArtifactTrustError::Untrusted);
@@ -504,5 +502,43 @@ mod tests {
             digest_bounded_regular_file(&artifact, 4),
             Err(ArtifactTrustError::Oversized)
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_regular_file_can_be_hardened_repeatedly() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("state");
+
+        ensure_private_regular_file(&file).unwrap();
+        ensure_private_regular_file(&file).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_regular_file_can_be_hardened_while_sqlite_is_open() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("state.sqlite3");
+
+        ensure_private_regular_file(&file).unwrap();
+        let connection = rusqlite::Connection::open(&file).unwrap();
+        ensure_private_regular_file(&file).unwrap();
+        drop(connection);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_executable_blocks_writes_and_deletion_while_held() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary.path().join("worker");
+        std::fs::write(&executable, b"worker").unwrap();
+
+        let verified = verify_executable(&executable).unwrap();
+        assert!(OpenOptions::new().write(true).open(&executable).is_err());
+        assert!(std::fs::remove_file(&executable).is_err());
+        drop(verified);
+
+        OpenOptions::new().write(true).open(&executable).unwrap();
+        std::fs::remove_file(&executable).unwrap();
     }
 }
