@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import { CpuIcon } from "lucide-react";
 import {
   DropdownMenu,
@@ -67,6 +67,7 @@ export const ChatModelMenu = memo(function ChatModelMenu({
   disabled = false,
   onSelectionChange,
 }: Props) {
+  const [open, setOpen] = useState(false);
   const selectedModel = useMemo(
     () => models.find((model) => model.id === selection.model_profile_id),
     [models, selection.model_profile_id],
@@ -99,7 +100,7 @@ export const ChatModelMenu = memo(function ChatModelMenu({
         };
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <PromptInputButton
           className="composer-model-menu"
@@ -111,92 +112,94 @@ export const ChatModelMenu = memo(function ChatModelMenu({
           <span>{triggerLabel}</span>
         </PromptInputButton>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        className="composer-model-menu-panel w-72 min-w-72"
-        side="top"
-        align="start"
-        sideOffset={8}
-        aria-label="Available models"
-      >
-        {catalog.length === 0 ? (
-          <DropdownMenuItem disabled>No connected models</DropdownMenuItem>
-        ) : (
-          catalog.map((provider, index) => (
-            <DropdownMenuRadioGroup
-              key={provider.id}
-              value={selection.model_profile_id}
-              onValueChange={(profileId) => {
-                const model = provider.models.find((item) => item.id === profileId);
-                if (model) onSelectionChange(selectionFor(model));
-              }}
-            >
-              {index > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel>{provider.label}</DropdownMenuLabel>
-              {provider.models.map((model) => (
-                <DropdownMenuRadioItem
-                  key={model.id}
-                  value={model.id}
-                  onSelect={keepMenuOpen}
-                >
-                  {model.name}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          ))
-        )}
-        {selectedModel ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Thinking</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={selection.thinking_level}
-              onValueChange={(thinking_level) =>
-                onSelectionChange({
-                  ...selection,
-                  thinking_level,
-                })
-              }
-            >
-              {selectedModel.thinking_levels.map((level) => (
-                <DropdownMenuRadioItem
-                  key={level}
-                  value={level}
-                  onSelect={keepMenuOpen}
-                >
-                  {level}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-            {selectedModel.run_controls.map((control) => (
+      {open ? (
+        <DropdownMenuContent
+          className="composer-model-menu-panel w-72 min-w-72"
+          side="top"
+          align="start"
+          sideOffset={8}
+          aria-label="Available models"
+        >
+          {catalog.length === 0 ? (
+            <DropdownMenuItem disabled>No connected models</DropdownMenuItem>
+          ) : (
+            catalog.map((provider, index) => (
               <DropdownMenuRadioGroup
-                key={control.id}
-                value={selection.run_options[control.id]}
-                onValueChange={(choice) =>
-                  onSelectionChange({
-                    ...selection,
-                    run_options: {
-                      ...selection.run_options,
-                      [control.id]: choice,
-                    },
-                  })
-                }
+                key={provider.id}
+                value={selection.model_profile_id}
+                onValueChange={(profileId) => {
+                  const model = provider.models.find((item) => item.id === profileId);
+                  if (model) onSelectionChange(selectionFor(model));
+                }}
               >
-                <DropdownMenuLabel>{control.label}</DropdownMenuLabel>
-                {control.choices.map((choice) => (
+                {index > 0 ? <DropdownMenuSeparator /> : null}
+                <DropdownMenuLabel>{provider.label}</DropdownMenuLabel>
+                {provider.models.map((model) => (
                   <DropdownMenuRadioItem
-                    key={choice.id}
-                    value={choice.id}
-                    title={choice.description}
+                    key={model.id}
+                    value={model.id}
                     onSelect={keepMenuOpen}
                   >
-                    {choice.label}
+                    {model.name}
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
-            ))}
-          </>
-        ) : null}
-      </DropdownMenuContent>
+            ))
+          )}
+          {selectedModel ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Thinking</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={selection.thinking_level}
+                onValueChange={(thinking_level) =>
+                  onSelectionChange({
+                    ...selection,
+                    thinking_level,
+                  })
+                }
+              >
+                {selectedModel.thinking_levels.map((level) => (
+                  <DropdownMenuRadioItem
+                    key={level}
+                    value={level}
+                    onSelect={keepMenuOpen}
+                  >
+                    {level}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              {selectedModel.run_controls.map((control) => (
+                <DropdownMenuRadioGroup
+                  key={control.id}
+                  value={selection.run_options[control.id]}
+                  onValueChange={(choice) =>
+                    onSelectionChange({
+                      ...selection,
+                      run_options: {
+                        ...selection.run_options,
+                        [control.id]: choice,
+                      },
+                    })
+                  }
+                >
+                  <DropdownMenuLabel>{control.label}</DropdownMenuLabel>
+                  {control.choices.map((choice) => (
+                    <DropdownMenuRadioItem
+                      key={choice.id}
+                      value={choice.id}
+                      title={choice.description}
+                      onSelect={keepMenuOpen}
+                    >
+                      {choice.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              ))}
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      ) : null}
     </DropdownMenu>
   );
 });
