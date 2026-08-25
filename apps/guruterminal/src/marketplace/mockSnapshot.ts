@@ -10,7 +10,7 @@ import type {
 
 type BundledConnectorEntry = Omit<MarketplaceEntry, "plugin" | "runtime"> & {
   runtime: Omit<MarketplaceEntry["runtime"], "kind"> & {
-    kind: MarketplaceEntry["runtime"]["kind"] | "bundled_mcp";
+    kind: MarketplaceEntry["runtime"]["kind"];
   };
 };
 
@@ -52,10 +52,7 @@ const bundledEntries = Object.entries(connectorModules)
   .map(([path, entry]) => ({
     ...entry,
     plugin: pluginNameFromPath(path, "connectors"),
-    runtime: {
-      ...entry.runtime,
-      kind: entry.runtime.kind === "bundled_mcp" ? "mcp" : entry.runtime.kind,
-    },
+    runtime: entry.runtime,
     trust: "first_party" as const,
   }))
   .sort((left, right) => left.id.localeCompare(right.id));

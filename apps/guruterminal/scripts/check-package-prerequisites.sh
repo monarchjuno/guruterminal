@@ -99,9 +99,7 @@ for required in \
     "$APP_ROOT/agent/SYSTEM.md" \
     "$APP_ROOT/agent/skills/research/SKILL.md" \
     "$APP_ROOT/agent/skills/wiki/SKILL.md" \
-    "$APP_ROOT/agent/skills/wiki/agents/openai.yaml" \
     "$APP_ROOT/agent/skills/lens/SKILL.md" \
-    "$APP_ROOT/agent/skills/lens/agents/openai.yaml" \
     "$APP_ROOT/THIRD_PARTY_NOTICES.md" \
     "$REPO_ROOT/LICENSE" \
     "$REPO_ROOT/NOTICE" \

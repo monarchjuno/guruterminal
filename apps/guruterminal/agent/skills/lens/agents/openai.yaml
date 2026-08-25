@@ -1,4 +1,0 @@
-interface:
-  display_name: "Lens"
-  short_description: "Use when the user selects this Skill or asks to review a Decision, update an interpretive lens, or record a falsifiable hypothesis."
-  default_prompt: "Use $lens to review this decision or update the interpretive lens from current evidence."

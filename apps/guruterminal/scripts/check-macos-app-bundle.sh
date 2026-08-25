@@ -72,11 +72,8 @@ for required in \
     "$AGENT_DIR/native-search/xai.mjs" \
     "$AGENT_DIR/guruterminal-provider-extension.mjs" \
     "$AGENT_DIR/skills/research/SKILL.md" \
-    "$AGENT_DIR/skills/research/agents/openai.yaml" \
     "$AGENT_DIR/skills/wiki/SKILL.md" \
-    "$AGENT_DIR/skills/wiki/agents/openai.yaml" \
     "$AGENT_DIR/skills/lens/SKILL.md" \
-    "$AGENT_DIR/skills/lens/agents/openai.yaml" \
     "$RESOURCE_DIR/LICENSE" \
     "$RESOURCE_DIR/NOTICE" \
     "$RESOURCE_DIR/THIRD_PARTY_NOTICES.md"; do

@@ -95,9 +95,7 @@ $required = @(
     (Join-Path $appRoot "agent\SYSTEM.md"),
     (Join-Path $appRoot "agent\skills\research\SKILL.md"),
     (Join-Path $appRoot "agent\skills\wiki\SKILL.md"),
-    (Join-Path $appRoot "agent\skills\wiki\agents\openai.yaml"),
     (Join-Path $appRoot "agent\skills\lens\SKILL.md"),
-    (Join-Path $appRoot "agent\skills\lens\agents\openai.yaml"),
     (Join-Path $appRoot "THIRD_PARTY_NOTICES.md"),
     (Join-Path $repoRoot "LICENSE"),
     (Join-Path $repoRoot "NOTICE")
