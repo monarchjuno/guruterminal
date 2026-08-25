@@ -134,8 +134,9 @@ npm run test:persistence
 
 It creates isolated state, persists an Agent and Chat through the UI, imports a
 validated Wiki/Lens/Evidence/Decision fixture through the real Memory import
-action, restarts the native app, verifies the same state and imported records,
-then removes only its own test state.
+action, edits and reverts the Wiki, deletes the imported Decision through its
+visible confirmation, restarts the native app, and verifies the remaining
+records and deleted Decision state before removing only its own test state.
 
 Model, Core, and finance flows require the normal staging step:
 

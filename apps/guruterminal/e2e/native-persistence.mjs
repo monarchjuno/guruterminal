@@ -52,6 +52,10 @@ const IMPORTED_RECORDS = [
   },
 ];
 const IMPORTED_WIKI = IMPORTED_RECORDS[0];
+const DELETED_IMPORTED_RECORD = IMPORTED_RECORDS[3];
+const REMAINING_IMPORTED_RECORDS = IMPORTED_RECORDS.filter(
+  (record) => record !== DELETED_IMPORTED_RECORD,
+);
 const IMPORTED_WIKI_BODY = `# Covenant
 
 The imported quality covenant keeps cash conversion above reported earnings before a valuation multiple can expand.`;
@@ -117,14 +121,14 @@ async function selectImportedAgent() {
   );
 }
 
-async function assertImportedMemory() {
+async function assertImportedMemory(records = IMPORTED_RECORDS) {
   await navigateTo("Memory");
   const library = await displayed("#main-panel-library");
-  await waitForText(library, "4 pages.");
-  for (const record of IMPORTED_RECORDS) await waitForText(library, record.title);
+  await waitForText(library, `${records.length} pages.`);
+  for (const record of records) await waitForText(library, record.title);
 
   const search = await displayed('input[placeholder="Search memory"]');
-  for (const record of IMPORTED_RECORDS) {
+  for (const record of records) {
     const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
     await kindFilter.click();
     await browser.waitUntil(
@@ -160,7 +164,7 @@ async function assertImportedMemory() {
   }
   await search.setValue("");
   await clickButton("All types", library);
-  await waitForText(library, "4 pages.");
+  await waitForText(library, `${records.length} pages.`);
 }
 
 async function openImportedMemory(record) {
@@ -219,6 +223,68 @@ async function editAndRevertImportedWiki() {
   await assertImportedWikiIsRestored();
 }
 
+async function deleteImportedMemory(record) {
+  const library = await openImportedMemory(record);
+  await clickButton("Delete", library);
+
+  let confirmation = "";
+  await browser.waitUntil(
+    async () => {
+      try {
+        confirmation = await browser.getAlertText();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    {
+      timeout: 10_000,
+      interval: 100,
+      timeoutMsg: "Memory delete confirmation did not appear",
+    },
+  );
+  assert.equal(confirmation, `Delete “${record.title}”?`);
+  await browser.acceptAlert();
+
+  await waitForText(library, `${REMAINING_IMPORTED_RECORDS.length} pages.`, 20_000);
+  await waitForText(library, "No matching memories", 20_000);
+  await waitForTextGone(library, record.title, 20_000);
+}
+
+async function assertImportedMemoryIsDeleted(record) {
+  await navigateTo("Memory");
+  const library = await displayed("#main-panel-library");
+  await waitForText(library, `${REMAINING_IMPORTED_RECORDS.length} pages.`);
+  const search = await displayed('input[placeholder="Search memory"]');
+  const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
+  if ((await kindFilter.getAttribute("aria-pressed")) !== "true") {
+    await kindFilter.click();
+  }
+  await search.setValue(record.query);
+  await browser.waitUntil(
+    async () => {
+      for (const button of await library.$$("button[data-library-result]")) {
+        if (
+          (await button.isDisplayed()) &&
+          (await button.getAttribute("aria-label"))?.startsWith(`Open ${record.title} (`)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    },
+    {
+      timeout: 10_000,
+      interval: 100,
+      timeoutMsg: `Deleted Memory record returned in search: ${record.title}`,
+    },
+  );
+  await waitForText(library, "No matching memories");
+  await search.setValue("");
+  await clickButton("All types", library);
+  await waitForText(library, `${REMAINING_IMPORTED_RECORDS.length} pages.`);
+}
+
 try {
   if (phase === "seed") {
     const onboarding = await displayed("main");
@@ -251,8 +317,11 @@ try {
     await selectImportedAgent();
     await assertImportedMemory();
     await editAndRevertImportedWiki();
+    await deleteImportedMemory(DELETED_IMPORTED_RECORD);
+    await assertImportedMemoryIsDeleted(DELETED_IMPORTED_RECORD);
+    await assertImportedMemory(REMAINING_IMPORTED_RECORDS);
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-seed.png"));
-    console.log("Native persistence seed with Memory import edit and Revert passed.");
+    console.log("Native persistence seed with Memory import edit, Revert, and delete passed.");
   } else {
     const navigation = await displayed('[aria-label="Application navigation"]');
     await waitForText(navigation, "Persistent E2E Agent");
@@ -273,10 +342,11 @@ try {
     );
     await clickButton("Agents");
     await selectImportedAgent();
-    await assertImportedMemory();
+    await assertImportedMemory(REMAINING_IMPORTED_RECORDS);
     await assertImportedWikiIsRestored();
+    await assertImportedMemoryIsDeleted(DELETED_IMPORTED_RECORD);
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-verify.png"));
-    console.log("Native persistence restart with reverted imported Memory passed.");
+    console.log("Native persistence restart with reverted and deleted imported Memory passed.");
   }
 } catch (error) {
   await browser.saveScreenshot(
