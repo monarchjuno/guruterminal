@@ -197,11 +197,39 @@ pub(crate) fn add_open_reparse_point_flag(options: &mut OpenOptions) {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
 }
 
+/// Configures a short-lived mutable state-file handle. Read/write sharing lets
+/// SQLite retain its own read/write handle while the app revalidates a path.
+/// Deliberately omit `FILE_SHARE_DELETE`: the validation handle still blocks
+/// rename, deletion, and path rebinding for its lifetime.
+pub(crate) fn add_open_reparse_point_flag_with_read_write_share(options: &mut OpenOptions) {
+    options
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
 pub(crate) fn open_regular_no_reparse(path: &Path) -> io::Result<File> {
     ensure_no_reparse_points(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
     add_open_reparse_point_flag(&mut options);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata_is_reparse(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "path is not a non-reparse regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Reopens a regular file only long enough to compare its filesystem identity
+/// with an already-trusted handle.
+pub(crate) fn reopen_regular_no_reparse_for_identity(path: &Path) -> io::Result<File> {
+    ensure_no_reparse_points(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    add_open_reparse_point_flag_with_read_write_share(&mut options);
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata_is_reparse(&metadata) {
@@ -475,5 +503,45 @@ mod tests {
         }
         assert!(ensure_no_reparse_points(&link).is_err());
         assert!(open_directory_no_reparse(&link).is_err());
+    }
+
+    #[test]
+    fn identity_reopen_allows_a_restrictive_writer_without_weakening_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("state");
+        std::fs::write(&path, b"state").unwrap();
+
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        add_open_reparse_point_flag(&mut options);
+        let retained = options.open(&path).unwrap();
+
+        let reopened = reopen_regular_no_reparse_for_identity(&path).unwrap();
+        assert_eq!(
+            filesystem_identity(&retained).unwrap(),
+            filesystem_identity(&reopened).unwrap()
+        );
+
+        let error = OpenOptions::new().write(true).open(&path).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(32));
+    }
+
+    #[test]
+    fn identity_reopen_rejects_reparse_points() {
+        use std::os::windows::fs::symlink_file;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("target");
+        let link = temporary.path().join("link");
+        std::fs::write(&target, b"state").unwrap();
+        if let Err(error) = symlink_file(&target, &link) {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                return;
+            }
+            panic!("failed to create test reparse point: {error}");
+        }
+
+        assert!(ensure_no_reparse_points(&link).is_err());
+        assert!(reopen_regular_no_reparse_for_identity(&link).is_err());
     }
 }
