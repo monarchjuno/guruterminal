@@ -234,10 +234,17 @@ jobs:
           hdiutil verify "${DMGS[0]}" >/dev/null
           MOUNT_DIR="$(mktemp -d "$RUNNER_TEMP/guruterminal-dmg.XXXXXX")"
           DMG_ATTACHED=false
-          cleanup_dmg_mount() {
-            if [[ "$DMG_ATTACHED" == true ]]; then
-              hdiutil detach "$MOUNT_DIR" >/dev/null
+          detach_dmg_mount() {
+            if [[ "$DMG_ATTACHED" != true ]]; then
+              return
             fi
+            if ! hdiutil detach "$MOUNT_DIR" >/dev/null; then
+              hdiutil detach -force "$MOUNT_DIR" >/dev/null
+            fi
+            DMG_ATTACHED=false
+          }
+          cleanup_dmg_mount() {
+            detach_dmg_mount
             rmdir "$MOUNT_DIR"
           }
           trap cleanup_dmg_mount EXIT
@@ -252,7 +259,6 @@ jobs:
           MOUNTED_APP="$MOUNT_DIR/Guru Terminal.app"
           test -d "$MOUNTED_APP"
           apps/guruterminal/scripts/check-macos-app-bundle.sh "$MOUNTED_APP"
-          hdiutil detach "$MOUNT_DIR" >/dev/null
-          DMG_ATTACHED=false
+          detach_dmg_mount
           rmdir "$MOUNT_DIR"
           trap - EXIT HUP INT TERM
