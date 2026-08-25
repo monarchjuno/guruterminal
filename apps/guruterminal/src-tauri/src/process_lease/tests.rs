@@ -26,6 +26,30 @@ mod unix {
         assert!(wait_for_group_exit_blocking(process_group_id, Duration::from_secs(2)).unwrap());
     }
 
+    #[tokio::test]
+    async fn bounded_group_exit_confirmation_keeps_live_groups_unconfirmed() {
+        let mut child = spawn_sleep();
+        let process_group_id = child.id() as i32;
+
+        let outcome = confirm_process_group_exit(process_group_id, Duration::from_millis(10)).await;
+        assert!(matches!(outcome, ProcessGroupTermination::Unconfirmed));
+
+        kill_and_reap(&mut child, process_group_id);
+    }
+
+    #[tokio::test]
+    async fn exited_group_has_a_confirmed_exit_observation() {
+        let mut child = spawn_sleep();
+        let process_group_id = child.id() as i32;
+
+        kill_and_reap(&mut child, process_group_id);
+        let outcome = confirm_process_group_exit(process_group_id, Duration::from_millis(10)).await;
+        assert!(
+            outcome.is_confirmed(),
+            "unexpected exit observation: {outcome:?}"
+        );
+    }
+
     #[test]
     fn identity_mismatch_never_kills_the_live_process() {
         let temporary = tempfile::tempdir().unwrap();

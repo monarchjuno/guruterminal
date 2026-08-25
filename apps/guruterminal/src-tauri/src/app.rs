@@ -120,9 +120,9 @@ impl PiArtifacts {
             runtime_dir: self.runtime_dir.clone(),
             extension: self.extension.clone(),
             system_prompt: self.system_prompt.clone(),
-            // Pi authentication and provider settings are app-scoped. The caller
-            // uses a persistent Guru workbench, while run-private capability
-            // files stay isolated below.
+            // Pi authentication and provider settings are app-scoped. Chat
+            // supplies a stable, session-private CWD; run-private capability
+            // files remain isolated below the separate private run directory.
             agent_data_dir: app_data_dir.join("pi"),
             working_dir,
             private_run_dir: app_data_dir.join("runs").join(guru_id).join(run_id),

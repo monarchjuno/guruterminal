@@ -84,3 +84,61 @@ fn guru_recovery_request_accepts_only_public_actions() {
         .is_err()
     );
 }
+
+#[test]
+fn chat_connector_authority_seal_is_canonical_and_uses_only_revisions() {
+    use crate::marketplace::connector_config::ConnectorConfigRevision;
+
+    let raw_config_value = "must-not-enter-the-cache-seal@example.invalid";
+    let mut first = ChatConnectorAuthoritySeal {
+        version: CHAT_CONNECTOR_AUTHORITY_SEAL_VERSION,
+        bindings: vec![
+            ChatConnectorBindingSeal {
+                entry_id: "zeta.connector".into(),
+                enabled: true,
+                execute: true,
+                updated_at_ms: 20,
+            },
+            ChatConnectorBindingSeal {
+                entry_id: "alpha.connector".into(),
+                enabled: false,
+                execute: false,
+                updated_at_ms: 10,
+            },
+        ],
+        connectors: vec![
+            ChatConnectorSeal {
+                entry_id: "zeta.connector".into(),
+                config_revision: ConnectorConfigRevision::Revision(
+                    "11111111-1111-4111-8111-111111111111".into(),
+                ),
+                active_credential_revision: Some("22222222-2222-4222-8222-222222222222".into()),
+            },
+            ChatConnectorSeal {
+                entry_id: "alpha.connector".into(),
+                config_revision: ConnectorConfigRevision::Absent,
+                active_credential_revision: None,
+            },
+        ],
+    };
+    let mut reordered = ChatConnectorAuthoritySeal {
+        version: CHAT_CONNECTOR_AUTHORITY_SEAL_VERSION,
+        bindings: first.bindings.iter().cloned().rev().collect(),
+        connectors: first.connectors.iter().cloned().rev().collect(),
+    };
+    canonicalize_chat_connector_authority_seal(&mut first);
+    canonicalize_chat_connector_authority_seal(&mut reordered);
+    assert_eq!(
+        chat_connector_authority_sha256(&first).unwrap(),
+        chat_connector_authority_sha256(&reordered).unwrap(),
+    );
+    let serialized = serde_json::to_string(&first).unwrap();
+    assert!(!serialized.contains(raw_config_value));
+
+    reordered.connectors[1].active_credential_revision =
+        Some("33333333-3333-4333-8333-333333333333".into());
+    assert_ne!(
+        chat_connector_authority_sha256(&first).unwrap(),
+        chat_connector_authority_sha256(&reordered).unwrap(),
+    );
+}

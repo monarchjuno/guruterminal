@@ -247,6 +247,7 @@ fn journal_paths(journal: &DeletionJournal) -> Result<Vec<DeletionPath>, Command
             let guru = PathBuf::from("gurus").join(&journal.guru_id);
             for parent in [
                 guru.join("pi-sessions"),
+                guru.join("pi-runtime"),
                 guru.join("workbench").join("attachments"),
             ] {
                 paths.push(DeletionPath {
@@ -463,6 +464,7 @@ mod tests {
         store.create_chat(&chat).unwrap();
         for relative in [
             "gurus/guru-a/pi-sessions/chat-a",
+            "gurus/guru-a/pi-runtime/chat-a",
             "gurus/guru-a/workbench/attachments/chat-a",
         ] {
             ensure_private_directory(&temporary.path().join(relative)).unwrap();
@@ -476,6 +478,10 @@ mod tests {
         assert!(!temporary
             .path()
             .join("gurus/guru-a/pi-sessions/chat-a")
+            .exists());
+        assert!(!temporary
+            .path()
+            .join("gurus/guru-a/pi-runtime/chat-a")
             .exists());
         assert!(!temporary
             .path()
