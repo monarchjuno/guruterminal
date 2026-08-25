@@ -41,18 +41,11 @@ while true; do sleep 1; done
   });
 
   let launchedPid;
-  let parentPid;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      const [pid, ppid] = readFileSync(marker, "utf8").trim().split(/\s+/);
+      const [pid] = readFileSync(marker, "utf8").trim().split(/\s+/);
       launchedPid = Number(pid);
-      parentPid = Number(ppid);
-      if (
-        Number.isInteger(launchedPid) &&
-        launchedPid > 0 &&
-        Number.isInteger(parentPid) &&
-        parentPid >= 0
-      ) {
+      if (Number.isInteger(launchedPid) && launchedPid > 0) {
         break;
       }
     } catch {
@@ -61,6 +54,8 @@ while true; do sleep 1; done
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(launchedPid, childPid);
-  assert.equal(parentPid, 1);
+  // CI can adopt an orphan under a runner-owned subreaper rather than PID 1.
+  // The helper has already exited because execFileSync returned; survival is
+  // the portable detached-launch contract.
   process.kill(childPid, 0);
 });
