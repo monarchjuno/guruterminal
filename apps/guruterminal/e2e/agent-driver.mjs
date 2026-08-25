@@ -194,6 +194,48 @@ async function openModelMenu(browser, trigger) {
   if (!menu) throw new Error("Chat model menu did not open");
 }
 
+async function visibleModelMenu(browser) {
+  for (const menu of await browser.$$(
+    '[data-slot="dropdown-menu-content"]',
+  )) {
+    if (await visible(menu)) return menu;
+  }
+  return null;
+}
+
+async function dismissModelMenu(browser) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!(await visibleModelMenu(browser))) return;
+    const trigger = await browser.$(
+      '[aria-label="Model settings for this message"]',
+    );
+    if (
+      (await visible(trigger)) &&
+      (await trigger.getAttribute("aria-expanded")) === "true"
+    ) {
+      await trigger.click();
+    } else {
+      await browser.keys("Escape");
+    }
+    try {
+      await browser.waitUntil(async () => !(await visibleModelMenu(browser)), {
+        timeout: 1_500,
+        interval: 100,
+      });
+    } catch {
+      // The native WebKit driver can retain a stale menu focus target after a
+      // RadioItem selection. Move focus to a stable outside control before
+      // retrying, matching a normal user dismissal without DOM scripting.
+      const chatTab = await browser.$("#main-tab-chat");
+      if (await visible(chatTab)) await chatTab.click();
+      await browser.keys("Escape");
+    }
+  }
+  if (await visibleModelMenu(browser)) {
+    throw new Error("Chat model menu did not close");
+  }
+}
+
 async function configureChatModel(browser, modelText, effortText) {
   const chatModel = '[aria-label="Model settings for this message"]';
   const chatModelControl = await browser.$(chatModel);
@@ -206,7 +248,6 @@ async function configureChatModel(browser, modelText, effortText) {
       await openModelMenu(browser, chatModelControl);
       await clickVisibleMenuItem(browser, "menuitemradio", modelText);
       await clickVisibleMenuItem(browser, "menuitemradio", effortText);
-      await browser.keys("Escape");
       label = await (await displayed(browser, chatModel)).getText();
     }
     if (!label.includes(modelText) || !label.includes(effortText)) {
@@ -214,6 +255,7 @@ async function configureChatModel(browser, modelText, effortText) {
         `Exact Chat model selection was not retained: ${label}`,
       );
     }
+    await dismissModelMenu(browser);
     console.log(`Verified visible Chat run model: ${label}`);
     return;
   }
@@ -232,7 +274,6 @@ async function configureLunaMax(browser) {
       await openModelMenu(browser, chatModelControl);
       await clickVisibleMenuItem(browser, "menuitemradio", "GPT-5.6 Luna");
       await clickVisibleMenuItem(browser, "menuitemradio", "max");
-      await browser.keys("Escape");
       label = await (await displayed(browser, chatModel)).getText();
     }
     if (!/GPT-5\.6 Luna/i.test(label) || !/\bmax\b/i.test(label)) {
@@ -240,6 +281,7 @@ async function configureLunaMax(browser) {
         `Exact Chat Luna/max selection was not retained: ${label}`,
       );
     }
+    await dismissModelMenu(browser);
     console.log(`Verified visible Chat run model: ${label}`);
     return;
   }
@@ -249,7 +291,6 @@ async function configureLunaMax(browser) {
 async function dumpProgress(browser, latestOnly = false) {
   const progress = await collectWorkProgress(browser, {
     latestOnly,
-    requireVisible: true,
   });
   console.log(JSON.stringify({ progress }, null, 2));
 }
@@ -259,10 +300,12 @@ async function waitForChatIdle(browser) {
     async () => {
       const stop = await browser.$('button[aria-label="Stop response"]');
       if (await visible(stop)) return false;
-      const live = await browser.$$(
+      for (const assistant of await browser.$$(
         "article.message.assistant.streaming",
-      );
-      return live.length === 0;
+      )) {
+        if (await visible(assistant)) return false;
+      }
+      return true;
     },
     {
       timeout: 600_000,
@@ -270,6 +313,7 @@ async function waitForChatIdle(browser) {
       timeoutMsg: "Timed out waiting for the current Chat response to settle",
     },
   );
+  await dismissModelMenu(browser);
   await dumpProgress(browser, true);
 }
 

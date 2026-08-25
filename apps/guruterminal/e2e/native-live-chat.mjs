@@ -473,20 +473,31 @@ function observeToken(token) {
 async function dismissOverlays() {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (!(await visibleModelMenu())) return;
+    await browser.keys("Escape");
+    try {
+      await browser.waitUntil(async () => !(await visibleModelMenu()), {
+        timeout: 1_500,
+        interval: 100,
+      });
+      return;
+    } catch {
+      // The native WebKit driver can retain a stale focus target after a
+      // RadioItem selection. Retry through the trigger only after testing the
+      // user-visible Escape path above.
+    }
     const trigger = await browser.$('[aria-label="Model settings for this message"]');
     if (
       (await isVisible(trigger)) &&
       (await trigger.getAttribute("aria-expanded")) === "true"
     ) {
       await trigger.click();
-    } else {
-      await browser.keys("Escape");
     }
     try {
       await browser.waitUntil(async () => !(await visibleModelMenu()), {
         timeout: 1_500,
         interval: 100,
       });
+      return;
     } catch {
       // Use a stable outside control before retrying Escape. This mirrors a
       // normal user click without relying on a WebDriver script scroll.
@@ -494,6 +505,9 @@ async function dismissOverlays() {
       if (await isVisible(chatTab)) await chatTab.click();
       await browser.keys("Escape");
     }
+  }
+  if (await visibleModelMenu()) {
+    throw new Error("Chat model menu did not close after Escape");
   }
 }
 

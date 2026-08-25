@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { ChatModelMenu } from "./ChatModelMenu";
 
 describe("ChatModelMenu", () => {
-  it("lets the user recover an empty thinking selection from Pi's model levels", async () => {
+  it("lets the user recover an empty thinking selection and reopen the menu", async () => {
     const user = userEvent.setup();
     const onSelectionChange = vi.fn();
 
@@ -55,5 +55,11 @@ describe("ChatModelMenu", () => {
       thinking_level: "max",
       run_options: {},
     });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Model settings for this message" }),
+    );
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 });
