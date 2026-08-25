@@ -15,14 +15,18 @@ assert.ok(
 );
 
 const session = JSON.parse(await readFile(sessionPath, "utf8"));
+console.log("native smoke: creating WebDriver session");
 const browser = await remote({
   ...session.webdriverConfig,
   capabilities: session.capabilities,
+  connectionRetryTimeout: 15_000,
+  connectionRetryCount: 0,
   logLevel: "error",
 });
 
 const artifactRoot = resolve(e2eRoot, "artifacts");
 await mkdir(artifactRoot, { recursive: true });
+console.log("native smoke: reading initial window size");
 const initialWindowSize = await browser.getWindowSize();
 
 const {
