@@ -176,9 +176,9 @@ jobs:
         shell: pwsh
         env:
           GURUTERMINAL_E2E_REQUIRE_STAGED_RUNTIMES: "1"
-          # A fresh Windows runner must compile the Tauri test binary before
+          # A fresh Windows runner needs a 20-minute cold-build budget before
           # its WebDriver endpoint can bind. Local runs retain the five-minute default.
-          GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS: "600000"
+          GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS: "1200000"
         run: npm run test:native:windows
 
   package-smoke:
