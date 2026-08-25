@@ -15,7 +15,11 @@ const MAX_HOST_CONTEXT_BYTES = 64 * 1024;
 const MAX_RUN_OPTIONS_BYTES = 4 * 1024;
 const MAX_MCP_TOOLS = 512;
 const MAX_MCP_SCHEMA_BYTES = 64 * 1024;
-const HOST_CONTEXT_OPEN_NOFOLLOW = process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
+export function hostContextOpenNoFollowForPlatform(platform = process.platform) {
+  return platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
+}
+
+const HOST_CONTEXT_OPEN_NOFOLLOW = hostContextOpenNoFollowForPlatform();
 const MEMORY_KIND_SLUGS = Object.freeze(["wiki", "lens", "evidence", "decision"]);
 const CHAT_LEARNING_KIND_SLUGS = Object.freeze(["wiki", "lens"]);
 const TOOL_NAMES = new Set([
@@ -471,6 +475,19 @@ function validProviderIds(ids) {
   );
 }
 
+export function resolveCapabilityComponent(components, id) {
+  const direct = components.get(id);
+  if (direct || typeof id !== "string") return direct;
+
+  let alias;
+  for (const component of components.values()) {
+    if (component.kind !== "tool" || !component.provider_ids?.includes(id)) continue;
+    if (alias) return undefined;
+    alias = component;
+  }
+  return alias;
+}
+
 function compactHostContext(parsed) {
   return JSON.stringify({
     ...parsed,
@@ -694,7 +711,7 @@ export default function guruTerminalExtension(originalPi) {
   pi.registerTool({
     name: "capability_load",
     label: "Load a capability",
-    description: "Activate one bundled, enabled capability component for this run. This cannot install anything, grant a permission, or expand the Rust authority snapshot.",
+    description: "Activate one bundled, enabled capability component for this run. Use a component ID from the compact index; an already-listed provider ID is accepted only when it identifies exactly one non-MCP tool component. This cannot install anything, grant a permission, or expand the Rust authority snapshot.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -704,7 +721,7 @@ export default function guruTerminalExtension(originalPi) {
       },
     },
     async execute(_toolCallId, input, signal) {
-      const component = hostContext.components.get(input.id);
+      const component = resolveCapabilityComponent(hostContext.components, input.id);
       if (!component) throw new Error("Capability is not available in this run");
       if (component.kind === "mcp") {
         const connected = await requestBroker(

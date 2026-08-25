@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import guruTerminalExtension from "./guruterminal-extension.mjs";
+import guruTerminalExtension, {
+  hostContextOpenNoFollowForPlatform,
+  resolveCapabilityComponent,
+} from "./guruterminal-extension.mjs";
 
 const EXPECTED_TOOLS = [
   "artifact_list",
@@ -48,6 +52,48 @@ const EXPECTED_TOOLS = [
   "web_search",
   "write",
 ];
+
+test("keeps host-context nofollow protection off Windows only", () => {
+  assert.equal(hostContextOpenNoFollowForPlatform("win32"), 0);
+  assert.equal(
+    hostContextOpenNoFollowForPlatform("darwin"),
+    constants.O_NOFOLLOW ?? 0,
+  );
+});
+
+test("resolves only canonical or unambiguous non-MCP capability identifiers", () => {
+  const direct = { id: "direct", kind: "tool", provider_ids: [] };
+  const providerAlias = {
+    id: "macro-data",
+    kind: "tool",
+    provider_ids: ["world-bank.indicators"],
+  };
+  const directCollision = {
+    id: "different-tool",
+    kind: "tool",
+    provider_ids: ["direct"],
+  };
+  const firstShared = { id: "first", kind: "tool", provider_ids: ["shared"] };
+  const secondShared = { id: "second", kind: "tool", provider_ids: ["shared"] };
+  const mcp = { id: "mcp/openbb", kind: "mcp", provider_ids: ["yfinance"] };
+  const components = new Map([
+    [direct.id, direct],
+    [providerAlias.id, providerAlias],
+    [directCollision.id, directCollision],
+    [firstShared.id, firstShared],
+    [secondShared.id, secondShared],
+    [mcp.id, mcp],
+  ]);
+
+  assert.equal(resolveCapabilityComponent(components, "direct"), direct);
+  assert.equal(
+    resolveCapabilityComponent(components, "world-bank.indicators"),
+    providerAlias,
+  );
+  assert.equal(resolveCapabilityComponent(components, "shared"), undefined);
+  assert.equal(resolveCapabilityComponent(components, "yfinance"), undefined);
+  assert.equal(resolveCapabilityComponent(components, "unknown"), undefined);
+});
 
 const BUNDLED_COMPONENTS = [
   {
@@ -627,6 +673,26 @@ test("registers only the product allowlist and round-trips through the private b
   assert.deepEqual(loadedWeb.details.tool_names, ["web_search", "web_fetch"]);
   assert(activeToolSnapshots.at(-1).includes("web_search"));
   assert(activeToolSnapshots.at(-1).includes("web_fetch"));
+  const loadedMacro = await capabilityLoad.execute("load-macro-provider", {
+    id: "world-bank.indicators",
+  });
+  assert.deepEqual(loadedMacro.details, {
+    id: "guruterminal.finance-providers/macro-data",
+    kind: "tool",
+    name: "Structured macro data",
+    tool_names: ["finance_macro_data"],
+  });
+  assert(activeToolSnapshots.at(-1).includes("finance_macro_data"));
+  const activeAfterMacro = activeToolSnapshots.at(-1);
+  await assert.rejects(
+    () => capabilityLoad.execute("load-ambiguous", { id: "guruterminal.finance-core" }),
+    /not available in this run/,
+  );
+  await assert.rejects(
+    () => capabilityLoad.execute("load-mcp-provider", { id: "yfinance" }),
+    /not available in this run/,
+  );
+  assert.deepEqual(activeToolSnapshots.at(-1), activeAfterMacro);
   await assert.rejects(
     () => capabilityLoad.execute("load-missing", { id: "unapproved/tool" }),
     /not available in this run/,

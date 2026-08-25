@@ -28,9 +28,13 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const IS_WINDOWS = process.platform === "win32";
 // libuv rejects O_WRONLY | O_TRUNC on Windows, so truncate the validated
 // descriptor below instead of asking Windows to truncate during open.
-const RESULT_OPEN_FLAGS = IS_WINDOWS
-  ? constants.O_WRONLY
-  : constants.O_WRONLY | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+export function resultOpenFlagsForPlatform(platform = process.platform) {
+  return platform === "win32"
+    ? constants.O_WRONLY
+    : constants.O_WRONLY | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+}
+
+const RESULT_OPEN_FLAGS = resultOpenFlagsForPlatform();
 const RESULT_FILE = process.env.GURUTERMINAL_PROVIDER_RESULT_FILE;
 const REQUEST_FILE = process.env.GURUTERMINAL_PROVIDER_REQUEST_FILE;
 const PROVIDER_API_KEY = process.env.GURUTERMINAL_PROVIDER_API_KEY;
