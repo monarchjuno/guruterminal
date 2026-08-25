@@ -1,9 +1,255 @@
+use super::super::schema::{migration_steps_for_test, FIRST_MIGRATABLE_SCHEMA_VERSION};
+use super::super::DeletionJournalRecord;
+use super::super::MemoryFinalizationJournalRecord;
 use super::support::*;
 use super::*;
 use crate::artifact_trust::ArtifactTrustError;
+use crate::domain::{DeletionJournal, DeletionKind, DeletionPhase};
+use crate::memory_finalization::{
+    MemoryFinalizationJournal, MemoryFinalizationScope, MEMORY_FINALIZATION_SCHEMA_VERSION,
+};
+use crate::memory_git::MemoryGitSnapshot;
+use crate::runtime::StagedMemoryChange;
 use crate::settings::ModelVisibility;
 use crate::store::STORE_SCHEMA_VERSION;
 use rusqlite::Connection;
+
+fn migration_chat() -> ChatSession {
+    ChatSession {
+        id: "chat-migration".into(),
+        guru_id: "guru-1".into(),
+        pi_session_id: "123e4567-e89b-42d3-a456-426614174010".into(),
+        pi_session_cache: None,
+        title: "Preserve this research".into(),
+        memory_policy: MemoryPolicy::default(),
+        messages: Vec::new(),
+        created_at_ms: 1,
+        updated_at_ms: 1,
+    }
+}
+
+fn downgrade_to_private_schema_v9(store: &SqliteStore) {
+    store
+        .lock()
+        .unwrap()
+        .execute_batch(
+            r#"
+            DROP INDEX deletion_journals_by_updated_at;
+            DROP INDEX memory_finalization_journals_by_updated_at;
+            PRAGMA user_version = 9;
+            "#,
+        )
+        .unwrap();
+}
+
+fn memory_finalization_journal() -> MemoryFinalizationJournal {
+    MemoryFinalizationJournal {
+        schema_version: MEMORY_FINALIZATION_SCHEMA_VERSION,
+        id: "memory-write:migration".into(),
+        guru_id: "guru-1".into(),
+        scope: MemoryFinalizationScope::StandaloneUser,
+        updated_at_ms: 3,
+        git: MemoryGitSnapshot {
+            previous_head: None,
+            symbolic_head: None,
+            original_index_tree: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            published_index_tree: None,
+        },
+        changes: vec![StagedMemoryChange {
+            guru_id: "guru-1".into(),
+            session_id: "memory-write:migration".into(),
+            relative_path: "guruterminal/wiki/migration.md".into(),
+            before_sha256: None,
+            before_markdown: None,
+            proposed_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .into(),
+            proposed_markdown: "# Preserve this pending Memory write\n".into(),
+            delete: false,
+        }],
+        commit_id: None,
+    }
+}
+
+#[test]
+fn schema_migrations_are_contiguous_from_private_v9_to_current() {
+    let mut version = FIRST_MIGRATABLE_SCHEMA_VERSION;
+    for (from, to) in migration_steps_for_test() {
+        assert_eq!(from, version, "migration sequence has a gap");
+        assert_eq!(to, from + 1, "migration must advance exactly one version");
+        version = to;
+    }
+    assert_eq!(
+        version, STORE_SCHEMA_VERSION,
+        "a schema version change requires a contiguous migration"
+    );
+}
+
+#[test]
+fn private_schema_v9_migrates_losslessly_to_current_schema() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("guruterminal.sqlite3");
+    let store = SqliteStore::open(&path).unwrap();
+    let profile = guru();
+    seed_guru(&store, &profile);
+    let chat = migration_chat();
+    store.create_chat(&chat).unwrap();
+
+    let mut visibility = ModelVisibility::default();
+    visibility.set_visible("openai-codex/gpt-5.6-luna", false);
+    store.save_model_visibility(&visibility).unwrap();
+    let journal = DeletionJournal {
+        id: "delete-chat-chat-migration".into(),
+        kind: DeletionKind::Chat,
+        guru_id: profile.id.clone(),
+        target_id: chat.id.clone(),
+        expected_source_identity: None,
+        phase: DeletionPhase::Prepared,
+        created_at_ms: 2,
+        updated_at_ms: 2,
+    };
+    store.create_deletion_journal(&journal).unwrap();
+    let memory_journal = memory_finalization_journal();
+    store
+        .create_memory_finalization_journal(&memory_journal)
+        .unwrap();
+    downgrade_to_private_schema_v9(&store);
+    drop(store);
+
+    let (migrated, fresh) = SqliteStore::open_or_replace_obsolete(&path).unwrap();
+    assert!(!fresh, "a supported private schema must not be replaced");
+    assert_eq!(migrated.get_guru(&profile.id).unwrap(), Some(profile));
+    assert_eq!(migrated.get_chat(&chat.id).unwrap(), Some(chat));
+    assert_eq!(migrated.get_model_visibility().unwrap(), Some(visibility));
+    assert!(matches!(
+        migrated.list_deletion_journals().unwrap().as_slice(),
+        [DeletionJournalRecord::Valid(value)] if value == &journal
+    ));
+    assert!(matches!(
+        migrated.list_memory_finalization_journals().unwrap().as_slice(),
+        [MemoryFinalizationJournalRecord::Valid(value)]
+            if value.id == memory_journal.id
+                && value.guru_id == memory_journal.guru_id
+                && value.updated_at_ms == memory_journal.updated_at_ms
+                && value.changes.len() == 1
+                && value.changes[0].proposed_markdown == "# Preserve this pending Memory write\n"
+    ));
+    drop(migrated);
+
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        STORE_SCHEMA_VERSION
+    );
+    for (index, table) in [
+        ("deletion_journals_by_updated_at", "deletion_journals"),
+        (
+            "memory_finalization_journals_by_updated_at",
+            "memory_finalization_journals",
+        ),
+    ] {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = ?1",
+                    [index],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            table
+        );
+    }
+}
+
+#[test]
+fn failed_migration_rolls_back_prior_steps_and_preserves_private_data() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("guruterminal.sqlite3");
+    let store = SqliteStore::open(&path).unwrap();
+    let profile = guru();
+    seed_guru(&store, &profile);
+    let chat = migration_chat();
+    store.create_chat(&chat).unwrap();
+    let journal = DeletionJournal {
+        id: "delete-chat-chat-migration".into(),
+        kind: DeletionKind::Chat,
+        guru_id: profile.id.clone(),
+        target_id: chat.id.clone(),
+        expected_source_identity: None,
+        phase: DeletionPhase::Prepared,
+        created_at_ms: 2,
+        updated_at_ms: 2,
+    };
+    store.create_deletion_journal(&journal).unwrap();
+    downgrade_to_private_schema_v9(&store);
+    store
+        .lock()
+        .unwrap()
+        .execute_batch(
+            r#"
+            CREATE INDEX memory_finalization_journals_by_updated_at
+                ON guru_profiles(updated_at_ms ASC, id ASC);
+            "#,
+        )
+        .unwrap();
+    drop(store);
+
+    assert!(matches!(
+        SqliteStore::open(&path),
+        Err(StoreError::Sqlite(_))
+    ));
+
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        FIRST_MIGRATABLE_SCHEMA_VERSION
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'deletion_journals_by_updated_at'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "the first migration statement must roll back"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = 'memory_finalization_journals_by_updated_at'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "guru_profiles"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM guru_profiles", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        profile.id
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM chat_sessions", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        chat.id
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM deletion_journals", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        journal.id
+    );
+}
 
 #[test]
 fn model_visibility_round_trips_independently_from_the_catalog() {
@@ -77,7 +323,13 @@ fn file_backed_store_hardens_database_and_rejects_side_symlinks() {
 #[test]
 fn unsupported_schema_versions_are_rejected_without_mutation() {
     let temporary = tempfile::tempdir().unwrap();
-    for version in [1_i64, 2, 5, 16, 17] {
+    for version in [
+        1_i64,
+        2,
+        FIRST_MIGRATABLE_SCHEMA_VERSION - 1,
+        STORE_SCHEMA_VERSION + 1,
+        STORE_SCHEMA_VERSION + 7,
+    ] {
         let path = temporary
             .path()
             .join(format!("guruterminal-v{version}.sqlite3"));

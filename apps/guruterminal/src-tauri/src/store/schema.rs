@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use super::{SqliteStore, StoreError, StoreResult};
 use crate::artifact_trust::{
@@ -10,8 +10,83 @@ use crate::artifact_trust::{
     ArtifactTrustError,
 };
 
-pub(crate) const STORE_SCHEMA_VERSION: i64 = 9;
+pub(crate) const STORE_SCHEMA_VERSION: i64 = 10;
+pub(super) const FIRST_MIGRATABLE_SCHEMA_VERSION: i64 = 9;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+type MigrationApply = for<'connection> fn(&Transaction<'connection>) -> StoreResult<()>;
+
+struct SchemaMigration {
+    from: i64,
+    to: i64,
+    apply: MigrationApply,
+}
+
+const SCHEMA_MIGRATIONS: &[SchemaMigration] = &[SchemaMigration {
+    from: 9,
+    to: 10,
+    apply: migrate_9_to_10,
+}];
+
+fn migrate_9_to_10(transaction: &Transaction<'_>) -> StoreResult<()> {
+    transaction.execute_batch(
+        r#"
+        CREATE INDEX deletion_journals_by_updated_at
+            ON deletion_journals(updated_at_ms ASC, id ASC);
+        CREATE INDEX memory_finalization_journals_by_updated_at
+            ON memory_finalization_journals(updated_at_ms ASC, id ASC);
+        "#,
+    )?;
+    Ok(())
+}
+
+fn unsupported_schema(found: i64) -> StoreError {
+    StoreError::UnsupportedSchema {
+        found,
+        expected: STORE_SCHEMA_VERSION,
+    }
+}
+
+fn migrations_from(found: i64) -> StoreResult<Vec<&'static SchemaMigration>> {
+    if !(FIRST_MIGRATABLE_SCHEMA_VERSION..STORE_SCHEMA_VERSION).contains(&found) {
+        return Err(unsupported_schema(found));
+    }
+
+    let mut version = found;
+    let mut migrations = Vec::new();
+    while version < STORE_SCHEMA_VERSION {
+        let mut candidates = SCHEMA_MIGRATIONS
+            .iter()
+            .filter(|migration| migration.from == version);
+        let Some(migration) = candidates.next() else {
+            return Err(unsupported_schema(found));
+        };
+        if candidates.next().is_some() || migration.to != version + 1 {
+            return Err(unsupported_schema(found));
+        }
+        migrations.push(migration);
+        version = migration.to;
+    }
+    Ok(migrations)
+}
+
+fn migrate_schema(connection: &mut Connection, found: i64) -> StoreResult<()> {
+    let migrations = migrations_from(found)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for migration in migrations {
+        (migration.apply)(&transaction)?;
+        transaction.pragma_update(None, "user_version", migration.to)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn migration_steps_for_test() -> impl Iterator<Item = (i64, i64)> {
+    SCHEMA_MIGRATIONS
+        .iter()
+        .map(|migration| (migration.from, migration.to))
+}
 
 pub(super) fn sqlite_side_path(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
@@ -104,7 +179,7 @@ impl SqliteStore {
         Self::from_connection(Connection::open_in_memory()?)
     }
 
-    fn from_connection(connection: Connection) -> StoreResult<Self> {
+    fn from_connection(mut connection: Connection) -> StoreResult<Self> {
         connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         let version =
             connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
@@ -120,12 +195,8 @@ impl SqliteStore {
                 }
             }
             STORE_SCHEMA_VERSION => {}
-            _ => {
-                return Err(StoreError::UnsupportedSchema {
-                    found: version,
-                    expected: STORE_SCHEMA_VERSION,
-                });
-            }
+            found if found < STORE_SCHEMA_VERSION => migrate_schema(&mut connection, found)?,
+            found => return Err(unsupported_schema(found)),
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
         if version == 0 {
@@ -226,6 +297,10 @@ impl SqliteStore {
                 digest TEXT NOT NULL,
                 data_json TEXT NOT NULL
             ) STRICT;
+            CREATE INDEX deletion_journals_by_updated_at
+                ON deletion_journals(updated_at_ms ASC, id ASC);
+            CREATE INDEX memory_finalization_journals_by_updated_at
+                ON memory_finalization_journals(updated_at_ms ASC, id ASC);
             CREATE INDEX chat_sessions_by_guru
                 ON chat_sessions(guru_id, updated_at_ms DESC);
             CREATE INDEX user_skills_by_guru
@@ -235,7 +310,7 @@ impl SqliteStore {
                 WHERE root_device IS NOT NULL AND root_inode IS NOT NULL;
             CREATE INDEX chat_artifacts_by_session
                 ON chat_artifacts(chat_session_id, updated_at_ms DESC);
-            PRAGMA user_version = 9;
+            PRAGMA user_version = 10;
             COMMIT;
             "#,
         )?;

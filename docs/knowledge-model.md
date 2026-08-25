@@ -50,3 +50,13 @@ memory` is off.
 ## Workspace
 
 Users may revise Wiki and Lens, including the charter Lens, in Memory. New Wiki and Lens pages are written from Chat. Evidence and Decision content stays immutable. The Guru workspace keeps Memory files in git; Rust commits after every canonical write. A later Chat turn can read a prior version. The user can revert an applied Wiki or Lens write to those prior bytes. Search finds pages; exact read is content authority. Record IDs are topic slugs without time strings. Time belongs in `as_of` or `period`.
+
+### Format compatibility
+
+`workspace.json` schema v1 is the public v0.0.1 workspace contract. It stays
+strict and append-only until a replacement is explicitly shipped. A future
+schema change must include a Rust-owned, idempotent workspace migration that
+first creates a Git recovery point, preserves the user-owned Markdown bytes,
+and verifies the migrated workspace before normal commands use it. Never
+silently recreate a user workspace or make an unknown schema permissive merely
+to open it.
