@@ -69,7 +69,7 @@ describe("Guru Terminal · Chat progress", () => {
     const timeline = await screen.findByLabelText("Work progress");
     expect(timeline).not.toHaveTextContent("web:f6495eccf2c0cca04e4c6a03");
     await user.click(
-      within(timeline).getByRole("button", {
+      await within(timeline).findByRole("button", {
         name: "Rate outlook · example.com",
       }),
     );

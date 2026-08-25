@@ -36,6 +36,18 @@ describe("Guru chat UI message conversion", () => {
     });
   });
 
+  it("uses a stable timestamp fallback for malformed UI messages", () => {
+    const message: GuruUIMessage = {
+      id: "assistant-missing-created-at",
+      role: "assistant",
+      parts: [{ type: "text", text: "Recovered text", state: "done" }],
+    };
+
+    expect(fromGuruUIMessage(message).created_at).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
+  });
+
   it("keeps progress when projecting a completed durable message", () => {
     const message: ChatMessage = {
       id: "assistant-1",
@@ -68,6 +80,33 @@ describe("Guru chat UI message conversion", () => {
 
     expect(restored.progress).toEqual(message.progress);
     expect(restored.content).toBe("Done");
+  });
+
+  it("uses a canonical error terminal instead of streamed partial text", () => {
+    const projected = fromGuruUIMessage({
+      id: "assistant-local",
+      role: "assistant",
+      metadata: {
+        native_message_id: "assistant-canonical",
+        created_at: "2026-08-09T00:00:01.000Z",
+        status: "error",
+        final_text: "Response could not be completed.",
+      },
+      parts: [
+        {
+          type: "text",
+          text: "Partial provider response that must not survive.",
+          state: "done",
+        },
+      ],
+    });
+
+    expect(projected).toMatchObject({
+      id: "assistant-canonical",
+      status: "error",
+      content: "Response could not be completed.",
+      created_at: "2026-08-09T00:00:01.000Z",
+    });
   });
 
   it("restores immutable artifact references from AI SDK data parts", () => {

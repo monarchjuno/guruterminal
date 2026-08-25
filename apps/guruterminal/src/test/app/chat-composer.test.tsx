@@ -360,6 +360,42 @@ describe("Guru Terminal · Chat composer", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("keeps the exact thinking level when Memory authority changes between turns", async () => {
+    const user = userEvent.setup();
+    const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });
+    const chatSend = vi.spyOn(bridge, "chatSend");
+    await openApp(bridge);
+    const modelMenu = modelMenuButton();
+    await user.click(modelMenu);
+    await chooseCatalogOption(user, "max");
+    expect(modelMenu).toHaveTextContent("GPT-5.6 Luna · max");
+
+    const composer = screen.getByRole("textbox", { name: "Message Guru" });
+    await user.type(composer, "First turn keeps Memory enabled");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
+    await screen.findByText("Response complete.");
+
+    await user.click(screen.getByRole("checkbox", { name: "Use memory" }));
+    await user.click(screen.getByRole("checkbox", { name: "Update memory" }));
+    expect(modelMenu).toHaveTextContent("GPT-5.6 Luna · max");
+    await user.type(composer, "Second turn disables Memory");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(2));
+    expect(chatSend.mock.calls[1]?.[0]).toMatchObject({
+      use_memory: false,
+      update_memory: false,
+      thinking_level: "max",
+    });
+    await waitFor(() =>
+      expect(document.querySelectorAll("article.message.assistant.complete")).toHaveLength(2),
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "Use memory" }));
+    await user.click(screen.getByRole("checkbox", { name: "Update memory" }));
+    expect(modelMenu).toHaveTextContent("GPT-5.6 Luna · max");
+  });
+
   it("sends Pi's Fast performance option separately from thinking", async () => {
     const user = userEvent.setup();
     const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });

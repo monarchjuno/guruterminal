@@ -25,6 +25,10 @@ type Options = {
   setThreads: Dispatch<SetStateAction<ChatThread[]>>;
 };
 
+// Tauri Channels may drain a burst of native token events synchronously. Keep
+// progressive rendering responsive while yielding between React store updates.
+const STREAM_RENDER_THROTTLE_MS = 50;
+
 const markLatestAssistantAborted = (messages: GuruUIMessage[]) => {
   let assistantIndex = messages.length - 1;
   while (
@@ -59,6 +63,15 @@ const markLatestAssistantAborted = (messages: GuruUIMessage[]) => {
   });
 };
 
+const sameThreadMessages = (
+  current: ChatThread["messages"],
+  next: ChatThread["messages"],
+) =>
+  current.length === next.length &&
+  current.every(
+    (message, index) => JSON.stringify(message) === JSON.stringify(next[index]),
+  );
+
 export function useGuruChat({
   bridge,
   chat,
@@ -77,7 +90,10 @@ export function useGuruChat({
     stop,
     status,
     error: chatError,
-  } = useChat<GuruUIMessage>({ chat });
+  } = useChat<GuruUIMessage>({
+    chat,
+    throttle: STREAM_RENDER_THROTTLE_MS,
+  });
 
   const messages = useMemo(
     () => uiMessages.map(fromGuruUIMessage),
@@ -117,11 +133,15 @@ export function useGuruChat({
   useEffect(() => {
     if (!activeThread?.id || isRunning) return;
     const threadId = activeThread.id;
-    setThreads((current) =>
-      current.map((thread) =>
-        thread.id === threadId ? { ...thread, messages } : thread,
-      ),
-    );
+    setThreads((current) => {
+      const thread = current.find((candidate) => candidate.id === threadId);
+      if (!thread || sameThreadMessages(thread.messages, messages)) {
+        return current;
+      }
+      return current.map((candidate) =>
+        candidate.id === threadId ? { ...candidate, messages } : candidate,
+      );
+    });
   }, [activeThread?.id, isRunning, messages, setThreads]);
 
   const submit = useCallback(
@@ -254,10 +274,14 @@ export function useGuruChat({
           const canonical = workspace.threads.find(
             (thread) => thread.id === threadId,
           );
+          const terminal = canonical?.messages.at(-1);
           if (
             canonical &&
             canonical.messages.length >= expectedMessageCount &&
-            canonical.messages.at(-1)?.status === "aborted"
+            terminal?.role === "assistant" &&
+            ["complete", "aborted", "error"].includes(
+              terminal.status ?? "complete",
+            )
           ) {
             setMessages(canonical.messages.map(toGuruUIMessage));
             return;

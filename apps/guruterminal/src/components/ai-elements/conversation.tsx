@@ -21,7 +21,10 @@ type ConversationContextValue = {
 const ConversationContext = createContext<ConversationContextValue | null>(null);
 const BOTTOM_TOLERANCE_PX = 2;
 
-export type ConversationProps = ComponentProps<"div">;
+export type ConversationProps = ComponentProps<"div"> & {
+  /** Advances when rendered Chat content changes and should stay in view. */
+  scrollRevision?: string | number;
+};
 
 /**
  * A deliberately small scroll owner for high-frequency Chat updates.
@@ -34,6 +37,7 @@ export const Conversation = ({
   children,
   onScroll,
   role = "log",
+  scrollRevision,
   ...props
 }: ConversationProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -55,7 +59,7 @@ export const Conversation = ({
 
   useLayoutEffect(() => {
     if (isAtBottomRef.current) scrollToBottom();
-  }, [children, scrollToBottom]);
+  }, [scrollRevision, scrollToBottom]);
 
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {

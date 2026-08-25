@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -78,11 +78,13 @@ export function ChatConversation({
   onRevertMemory,
 }: Props) {
   const [emailDrafts, setEmailDrafts] = useState<Record<string, string>>({});
+  const scrollRevision = useMemo(() => JSON.stringify(messages), [messages]);
   return (
     <Conversation
       className="message-scroll"
       aria-label="Conversation"
       aria-relevant="additions"
+      scrollRevision={scrollRevision}
     >
       <ConversationContent className="conversation-content">
         {!messages.length ? (
