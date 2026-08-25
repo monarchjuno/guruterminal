@@ -18,10 +18,12 @@ python3 apps/guruterminal/scripts/check-github-release-setup.py
 It verifies the public repository identity, immutable releases, `main`
 pull-request protection, an active `v*` tag rule that restricts creation,
 updates, and deletion, each required protected environment, and the **names** of every
-secret referenced by `release.yml`. It never prints or reads secret values and
-does not change GitHub state. A nonzero result names every missing item. The
-auditor intentionally derives the required release-secret names from the
-workflow so a future signing change cannot silently make the checklist stale.
+secret referenced by `release.yml`. Those names must be present only in the
+`release` environment, never at repository scope or in either non-signing
+environment. It never prints or reads secret values and does not change GitHub
+state. A nonzero result names every missing item. The auditor intentionally
+derives the required release-secret names from the workflow so a future signing
+change cannot silently make the checklist stale.
 
 The immutable-release endpoint requires repository administration read access.
 Release workflows intentionally do not receive an administrative token, so the

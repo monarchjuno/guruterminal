@@ -2,9 +2,9 @@
 """Read-only release-setup audit for the public GitHub repository.
 
 The audit intentionally reads only repository metadata, rules, environments,
-and environment-secret *names*. It never creates GitHub state or reveals a
-secret value. Keep this outside the normal offline verification gate: it
-requires an authenticated ``gh`` client with repository and Environment-read
+and repository/environment-secret *names*. It never creates GitHub state or
+reveals a secret value. Keep this outside the normal offline verification gate:
+it requires an authenticated ``gh`` client with repository and Environment-read
 access.
 """
 
@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -24,6 +25,7 @@ from urllib.parse import quote
 OFFICIAL_REPOSITORY = "monarchjuno/guruterminal"
 EXPECTED_DEFAULT_BRANCH = "main"
 REQUIRED_ENVIRONMENTS = ("release", "release-qualification", "stable-release")
+TAG_TRIGGERED_ENVIRONMENTS = frozenset(REQUIRED_ENVIRONMENTS)
 REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
 MAIN_BRANCH_RULE_TYPES = frozenset(("pull_request",))
@@ -86,6 +88,18 @@ def has_required_rule_types(value: object, required_types: frozenset[str]) -> bo
     return required_types <= types
 
 
+def ruleset_has_no_bypass_actors(ruleset: dict[str, object]) -> bool:
+    """Require an explicit, empty bypass list before trusting a ruleset.
+
+    The REST response can omit ``bypass_actors`` when the caller cannot see
+    it. Treating that omission as an empty list would turn limited read access
+    into a false protection pass. GitHub's documented bypass modes all grant
+    an actor a way around a rule, so no nonempty list is safe for this gate.
+    """
+
+    return "bypass_actors" in ruleset and ruleset.get("bypass_actors") == []
+
+
 def active_ruleset_protects(
     ruleset: object,
     *,
@@ -96,6 +110,8 @@ def active_ruleset_protects(
 ) -> bool:
     value = require_object(ruleset, "repository ruleset")
     if value.get("target") != target or value.get("enforcement") != "active":
+        return False
+    if not ruleset_has_no_bypass_actors(value):
         return False
     if not has_required_rule_types(value.get("rules"), required_rule_types):
         return False
@@ -154,15 +170,79 @@ def environments_by_name(value: object) -> dict[str, dict[str, object]]:
     return result
 
 
-def environment_is_protected(environment: dict[str, object]) -> bool:
+def environment_uses_custom_branch_policies(environment: dict[str, object]) -> bool:
+    branch_policy = environment.get("deployment_branch_policy")
+    return (
+        isinstance(branch_policy, dict)
+        and branch_policy.get("custom_branch_policies") is True
+    )
+
+
+def deployment_policy_lists_v_ref_pattern(value: object | None) -> bool:
+    """Return whether a complete official policy list contains the exact ``v*`` name.
+
+    GitHub's read-only list/get deployment-policy responses expose ``id``,
+    ``node_id``, and ``name``, but not the policy target type. The audit can
+    therefore prove only the exact policy name. Tag execution remains enforced
+    at runtime by the tag-triggered release workflow and the qualification/
+    promotion workflows' ``GITHUB_REF_TYPE=tag`` guards.
+    """
+
+    if not isinstance(value, dict):
+        return False
+    policies = value.get("branch_policies")
+    if not isinstance(policies, list):
+        return False
+    total_count = value.get("total_count")
+    if (
+        not isinstance(total_count, int)
+        or isinstance(total_count, bool)
+        or total_count != len(policies)
+    ):
+        return False
+    lists_v_ref_pattern = False
+    for policy in policies:
+        if not isinstance(policy, dict):
+            return False
+        policy_id = policy.get("id")
+        node_id = policy.get("node_id")
+        name = policy.get("name")
+        if (
+            not isinstance(policy_id, int)
+            or isinstance(policy_id, bool)
+            or policy_id < 1
+            or not isinstance(node_id, str)
+            or not node_id
+            or not isinstance(name, str)
+            or not name
+        ):
+            return False
+        if name == "v*":
+            lists_v_ref_pattern = True
+    return lists_v_ref_pattern
+
+
+def environment_is_protected(
+    environment: dict[str, object],
+    *,
+    requires_v_tag_policy: bool,
+    has_v_ref_policy: bool,
+) -> bool:
+    if requires_v_tag_policy and (
+        not environment_uses_custom_branch_policies(environment) or not has_v_ref_policy
+    ):
+        return False
     protection_rules = environment.get("protection_rules")
     if isinstance(protection_rules, list) and protection_rules:
         return True
     branch_policy = environment.get("deployment_branch_policy")
-    return isinstance(branch_policy, dict) and bool(
-        branch_policy.get("protected_branches")
-        or branch_policy.get("custom_branch_policies")
-    )
+    if not isinstance(branch_policy, dict):
+        return False
+    if branch_policy.get("protected_branches") is True:
+        return True
+    if branch_policy.get("custom_branch_policies") is True:
+        return has_v_ref_policy if requires_v_tag_policy else True
+    return False
 
 
 def environment_requires_independent_reviewer(environment: dict[str, object]) -> bool:
@@ -205,25 +285,61 @@ def legacy_main_has_pull_request_protection(value: object | None) -> bool:
     return isinstance(protection.get("required_pull_request_reviews"), dict)
 
 
-def environment_secret_names(value: object) -> set[str]:
-    payload = require_object(value, "environment secrets response")
+def secret_names(value: object, *, response_label: str, item_label: str) -> set[str]:
+    payload = require_object(value, response_label)
     secrets = payload.get("secrets")
     if not isinstance(secrets, list):
-        raise AuditError("environment secrets response must contain a secrets array")
+        raise AuditError(f"{response_label} must contain a secrets array")
+    total_count = payload.get("total_count")
+    if (
+        not isinstance(total_count, int)
+        or isinstance(total_count, bool)
+        or total_count != len(secrets)
+    ):
+        raise AuditError(f"{response_label} must return a complete secrets array")
     names: set[str] = set()
     for secret in secrets:
-        item = require_object(secret, "environment secret")
+        item = require_object(secret, item_label)
         name = item.get("name")
         if not isinstance(name, str) or not name:
-            raise AuditError("environment secret name must be a nonempty string")
+            raise AuditError(f"{item_label} name must be a nonempty string")
         names.add(name)
+    return names
+
+
+def environment_secret_names(value: object) -> set[str]:
+    return secret_names(
+        value,
+        response_label="environment secrets response",
+        item_label="environment secret",
+    )
+
+
+def repository_secret_names(value: object) -> set[str]:
+    return secret_names(
+        value,
+        response_label="repository secrets response",
+        item_label="repository secret",
+    )
+
+
+def secret_names_for_environment(
+    environment_secrets: Mapping[str, set[str]], environment_name: str
+) -> set[str]:
+    names = environment_secrets.get(environment_name, set())
+    if not isinstance(names, set) or not all(
+        isinstance(name, str) and name for name in names
+    ):
+        raise AuditError(f"secret names for environment {environment_name} are invalid")
     return names
 
 
 def audit_release_setup(
     *,
     repository: str,
-    release_secrets: set[str],
+    repository_secrets: set[str],
+    environment_secrets: Mapping[str, set[str]],
+    deployment_branch_policies: Mapping[str, object],
     required_secrets: set[str],
     repository_data: object,
     rulesets: object,
@@ -338,15 +454,36 @@ def audit_release_setup(
                 f"environment {name}",
                 "set can_admins_bypass to false to disallow administrator bypass",
             )
-        elif environment_is_protected(environment):
-            add("pass", f"environment {name}", "deployment protection is configured")
+        elif environment_is_protected(
+            environment,
+            requires_v_tag_policy=name in TAG_TRIGGERED_ENVIRONMENTS,
+            has_v_ref_policy=deployment_policy_lists_v_ref_pattern(
+                deployment_branch_policies.get(name)
+            ),
+        ):
+            add(
+                "pass",
+                f"environment {name}",
+                "deployment protection and an exact v* custom policy are configured; "
+                "the policy-list API has no target type, so tag triggers and "
+                "GITHUB_REF_TYPE=tag guards enforce tag execution at runtime",
+            )
         else:
+            if name in TAG_TRIGGERED_ENVIRONMENTS:
+                detail = (
+                    "configure the custom deployment policy with an exact v* pattern; "
+                    "the policy-list API has no target type, so tag triggers and "
+                    "GITHUB_REF_TYPE=tag guards enforce tag execution at runtime"
+                )
+            else:
+                detail = "configure a reviewer, wait timer, or deployment branch policy"
             add(
                 "error",
                 f"environment {name}",
-                "configure a reviewer, wait timer, or deployment branch policy",
+                detail,
             )
 
+    release_secrets = secret_names_for_environment(environment_secrets, "release")
     missing_secrets = sorted(required_secrets - release_secrets)
     if missing_secrets:
         add(
@@ -360,6 +497,38 @@ def audit_release_setup(
             "release environment secrets",
             "all release workflow secret names are present",
         )
+
+    secret_scopes: tuple[tuple[str, set[str]], ...] = (
+        ("repository", repository_secrets),
+        (
+            "environment release-qualification",
+            secret_names_for_environment(environment_secrets, "release-qualification"),
+        ),
+        (
+            "environment stable-release",
+            secret_names_for_environment(environment_secrets, "stable-release"),
+        ),
+    )
+    for scope, names in secret_scopes:
+        if not isinstance(names, set) or not all(
+            isinstance(name, str) and name for name in names
+        ):
+            raise AuditError(f"secret names for {scope} are invalid")
+        leaked_names = sorted(required_secrets & names)
+        subject = f"{scope} secret isolation"
+        if leaked_names:
+            add(
+                "error",
+                subject,
+                "workflow-referenced secret names must exist only in release: "
+                + ", ".join(leaked_names),
+            )
+        else:
+            add(
+                "pass",
+                subject,
+                "no release workflow secret names are present",
+            )
     return findings
 
 
@@ -399,17 +568,34 @@ def remote_audit(repository: str, workflow: Path, gh: str) -> list[Finding]:
     )
     environments = gh_api(gh, f"/repos/{repository}/environments?per_page=100")
     configured_environments = environments_by_name(environments)
-    release_secrets: set[str] = set()
-    if "release" in configured_environments:
-        release_secrets = environment_secret_names(
+    repository_secrets = repository_secret_names(
+        gh_api(gh, f"/repos/{repository}/actions/secrets?per_page=100")
+    )
+    environment_secrets: dict[str, set[str]] = {}
+    deployment_branch_policies: dict[str, object] = {}
+    for name in REQUIRED_ENVIRONMENTS:
+        environment = configured_environments.get(name)
+        if environment is None:
+            continue
+        environment_secrets[name] = environment_secret_names(
             gh_api(
                 gh,
-                f"/repos/{repository}/environments/{quote('release', safe='')}/secrets?per_page=100",
+                f"/repos/{repository}/environments/{quote(name, safe='')}/secrets?per_page=100",
             )
         )
+        if (
+            name in TAG_TRIGGERED_ENVIRONMENTS
+            and environment_uses_custom_branch_policies(environment)
+        ):
+            deployment_branch_policies[name] = gh_api(
+                gh,
+                f"/repos/{repository}/environments/{quote(name, safe='')}/deployment-branch-policies?per_page=100",
+            )
     return audit_release_setup(
         repository=repository,
-        release_secrets=release_secrets,
+        repository_secrets=repository_secrets,
+        environment_secrets=environment_secrets,
+        deployment_branch_policies=deployment_branch_policies,
         required_secrets=required_secrets,
         repository_data=repository_data,
         rulesets=rulesets,
