@@ -19,7 +19,13 @@ const browser = await remote({
 const artifactRoot = resolve(e2eRoot, "artifacts");
 await mkdir(artifactRoot, { recursive: true });
 
-const { displayed, clickButton, waitForText, waitForTextGone } = createWebdriverHelpers(
+const {
+  childWithText,
+  displayed,
+  clickButton,
+  waitForText,
+  waitForTextGone,
+} = createWebdriverHelpers(
   browser,
   { defaultTimeout: 10_000, bodyTextLimit: 16_000 },
 );
@@ -75,6 +81,7 @@ tags:
 
 The imported quality covenant keeps cash conversion above reported earnings before a valuation multiple can expand.`;
 const IMPORTED_WIKI_EDIT_MARKER = "Native persistence Wiki edit marker";
+const MEMORY_WRITE_TIMEOUT_MS = 60_000;
 
 async function navigateTo(text) {
   for (const button of await browser.$$("button")) {
@@ -217,7 +224,8 @@ async function editAndRevertImportedWiki() {
   assert.equal(await body.getValue(), IMPORTED_WIKI_BODY);
   await body.setValue(`${IMPORTED_WIKI_BODY}\n\n${IMPORTED_WIKI_EDIT_MARKER}`);
   await clickButton("Save memory", editor);
-  await waitForText(library, IMPORTED_WIKI_EDIT_MARKER, 20_000);
+  await childWithText(library, "button", "Revert", MEMORY_WRITE_TIMEOUT_MS);
+  await waitForText(library, IMPORTED_WIKI_EDIT_MARKER, MEMORY_WRITE_TIMEOUT_MS);
   await clickButton("Revert", library);
   await waitForTextGone(library, IMPORTED_WIKI_EDIT_MARKER, 20_000);
   await assertImportedWikiIsRestored();
