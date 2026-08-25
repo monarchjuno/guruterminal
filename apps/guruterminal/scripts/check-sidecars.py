@@ -1004,6 +1004,7 @@ def openbb_smoke(executable: Path, runtime_dir: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             env=openbb_environment(),
             **spawn_options(),
         )
