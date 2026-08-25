@@ -196,9 +196,11 @@ impl SecureDeletionRoot {
                 "deletion rename must stay in one pinned parent",
             ));
         }
+        #[cfg(unix)]
         let source_name = source
             .file_name()
             .ok_or_else(|| CommandError::internal("deletion source has no name"))?;
+        #[cfg(unix)]
         let destination_name = destination
             .file_name()
             .ok_or_else(|| CommandError::internal("deletion destination has no name"))?;
@@ -277,6 +279,7 @@ impl SecureDeletionRoot {
         expected: Option<&RootFilesystemIdentity>,
     ) -> Result<(), CommandError> {
         validate_relative_path(relative)?;
+        #[cfg(unix)]
         let name = relative
             .file_name()
             .ok_or_else(|| CommandError::internal("deletion path has no name"))?;
@@ -310,6 +313,7 @@ impl SecureDeletionRoot {
 
     pub fn entry_exists(&self, relative: &Path) -> Result<bool, CommandError> {
         validate_relative_path(relative)?;
+        #[cfg(unix)]
         let name = relative
             .file_name()
             .ok_or_else(|| CommandError::internal("deletion path has no name"))?;
@@ -351,6 +355,7 @@ impl SecureDeletionRoot {
         relative: &Path,
     ) -> Result<Option<RootFilesystemIdentity>, CommandError> {
         validate_relative_path(relative)?;
+        #[cfg(unix)]
         let name = relative
             .file_name()
             .ok_or_else(|| CommandError::internal("private directory has no name"))?;

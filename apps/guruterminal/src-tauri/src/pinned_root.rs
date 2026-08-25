@@ -4,12 +4,12 @@ use rustix::{
     fs::{fstat, open, openat, FileType, Mode, OFlags},
     io::fcntl_dupfd_cloexec,
 };
-use std::{
-    io,
-    path::{Component, Path, PathBuf},
-};
+use std::io;
+#[cfg(unix)]
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
+#[cfg(unix)]
 use crate::domain::RootFilesystemIdentity;
 
 #[derive(Debug, Error)]

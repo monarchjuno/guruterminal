@@ -165,6 +165,7 @@ pub struct ChildProcessLease {
     directory: PathBuf,
     #[cfg(unix)]
     file_name: String,
+    #[cfg(unix)]
     process_group_id: i32,
 }
 

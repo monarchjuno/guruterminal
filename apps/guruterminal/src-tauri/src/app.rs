@@ -1,13 +1,15 @@
 use std::{
     collections::{BTreeMap, HashMap},
     env,
-    fs::{File, OpenOptions},
+    fs::File,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use tauri::{AppHandle, Manager};

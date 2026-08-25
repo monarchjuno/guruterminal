@@ -8,10 +8,11 @@ use rustix::{
     io::Errno,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::ffi::{OsStr, OsString};
 #[cfg(not(unix))]
 use std::fs::OpenOptions;
 use std::{
-    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
@@ -711,7 +712,7 @@ fn rollback_applied_prefix_at(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn target_has_digest(path: &Path, expected: &str) -> Result<bool, RuntimeError> {
     match fs::read(path) {
         Ok(bytes) => Ok(sha256(&bytes) == expected),
@@ -1429,7 +1430,7 @@ fn rustix_io(error: Errno) -> RuntimeError {
     RuntimeError::Io(io::Error::from(error))
 }
 
-#[cfg(any(test, not(unix)))]
+#[cfg(any(test, all(not(unix), not(windows))))]
 fn commit_staged_file(
     staged: &Path,
     target: &Path,
