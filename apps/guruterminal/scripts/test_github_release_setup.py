@@ -50,6 +50,7 @@ def configured_environments() -> dict[str, object]:
             {"name": "release-qualification", "protection_rules": [{"id": 2}]},
             {
                 "name": "stable-release",
+                "can_admins_bypass": False,
                 "protection_rules": [
                     {
                         "type": "required_reviewers",
@@ -223,6 +224,31 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             errors["environment stable-release"],
             "configure a required reviewer and prevent self-review",
         )
+
+    def test_stable_release_administrator_bypass_fails_closed(self) -> None:
+        for label, value in (
+            ("enabled", True),
+            ("missing", None),
+            ("ambiguous", "false"),
+        ):
+            with self.subTest(label=label):
+                environments = configured_environments()
+                stable_release = environments["environments"][2]
+                assert isinstance(stable_release, dict)
+                if label == "missing":
+                    stable_release.pop("can_admins_bypass")
+                else:
+                    stable_release["can_admins_bypass"] = value
+                findings = self.audit(environments=environments)
+                errors = {
+                    finding.subject: finding.detail
+                    for finding in findings
+                    if finding.level == "error"
+                }
+                self.assertEqual(
+                    errors["environment stable-release"],
+                    "set can_admins_bypass to false to disallow administrator bypass",
+                )
 
     def test_workflow_secret_references_are_derived_without_reading_values(
         self,
