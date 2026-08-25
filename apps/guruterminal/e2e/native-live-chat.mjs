@@ -19,11 +19,20 @@ const sessionPath = process.argv[2];
 const phase = process.argv[3];
 assert.ok(
   sessionPath,
-  "usage: node native-live-chat.mjs <current-session.json> <run|verify|smoke>",
+  "usage: node native-live-chat.mjs <current-session.json> <run|verify|smoke|artifact|artifact-memory|artifact-after-finance|artifact-after-finance-warm|artifact-after-finance-no-history>",
 );
 assert.ok(
-  ["run", "verify", "smoke"].includes(phase),
-  "phase must be run, verify, or smoke",
+  [
+    "run",
+    "verify",
+    "smoke",
+    "artifact",
+    "artifact-memory",
+    "artifact-after-finance",
+    "artifact-after-finance-warm",
+    "artifact-after-finance-no-history",
+  ].includes(phase),
+  "phase must be run, verify, smoke, artifact, artifact-memory, artifact-after-finance, artifact-after-finance-warm, or artifact-after-finance-no-history",
 );
 
 const session = JSON.parse(await readFile(sessionPath, "utf8"));
@@ -49,12 +58,22 @@ const webResearchResultToken = "LUNA-WEB-RESEARCH-E2E";
 const restartedMemoryToken = "LUNA-RESTARTED-MEMORY-E2E";
 const wikiTitle = "WP4 cobalt-foil spare-capacity rule";
 const lensTitle = "WP4 native-e2e capital-cycle lens";
+// Luna/max can spend several minutes planning the first tool call after a
+// deliberately long, multi-capability transcript. Keep this above Pi's
+// default five-minute provider idle policy: it is a live acceptance budget,
+// not a product-side liveness deadline.
+const FIRST_TOOL_PROGRESS_TIMEOUT_MS = 360_000;
+// Max-thinking models can legitimately produce no user-visible token before
+// the provider's five-minute idle boundary. This is an acceptance budget, not
+// a product-side watchdog.
+const FIRST_VISIBLE_ASSISTANT_DELTA_TIMEOUT_MS = 360_000;
 const acceptanceObservations = {
   streamedAssistantDelta: null,
   financeCore: null,
   worldBankMacro: null,
   openbbKeyless: null,
   webResearch: null,
+  artifact: null,
   restartedMemoryReuse: null,
 };
 
@@ -237,6 +256,13 @@ async function chooseLunaMax() {
   assert.match(await modelMenu.getText(), /max/i);
 }
 
+async function assertLunaMaxSelection(context) {
+  const modelMenu = await displayed('[aria-label="Model settings for this message"]');
+  const label = await modelMenu.getText();
+  assert.match(label, /GPT-5\.6 Luna/i, `${context}: Luna selection changed`);
+  assert.match(label, /max/i, `${context}: max thinking selection changed`);
+}
+
 async function composerCheckbox(labelText) {
   const checkbox = await browser.waitUntil(
     async () => {
@@ -272,7 +298,10 @@ async function sendPrompt(text) {
   await (await displayed('button[aria-label="Send"]')).click();
 }
 
-async function assertVisibleStreamedAssistantDelta(caseName, timeout = 180_000) {
+async function assertVisibleStreamedAssistantDelta(
+  caseName,
+  timeout = FIRST_VISIBLE_ASSISTANT_DELTA_TIMEOUT_MS,
+) {
   await browser.waitUntil(
     async () => {
       for (const article of await browser.$$(
@@ -329,6 +358,29 @@ async function waitUntilIdle(timeout = 30_000) {
       timeoutMsg: `Chat did not go idle\n${await bodyText()}`,
     },
   );
+}
+
+async function visibleWorkProgresses() {
+  const progress = [];
+  for (const candidate of await browser.$$('[aria-label="Work progress"]')) {
+    if (await isVisible(candidate)) progress.push(candidate);
+  }
+  return progress;
+}
+
+async function latestWorkProgressAfter(previousCount, timeout = 60_000) {
+  await browser.waitUntil(
+    async () => (await visibleWorkProgresses()).length > previousCount,
+    {
+      timeout,
+      interval: 150,
+      timeoutMsg: `Timed out waiting for the current response Work progress\n${await bodyText()}`,
+    },
+  );
+  const progress = await visibleWorkProgresses();
+  const latest = progress.at(-1);
+  assert.ok(latest, "Current response Work progress disappeared");
+  return latest;
 }
 
 async function assertNoVisibleAlerts(caseName) {
@@ -903,18 +955,37 @@ async function runWebResearchTurn() {
 }
 
 async function runArtifactTurn() {
+  const turnStartedAt = Date.now();
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
+  const previousProgressCount = (await visibleWorkProgresses()).length;
   await sendPrompt(
-    `For a native end-to-end test, call artifact_publish exactly once. Create a Markdown document titled "${artifactTitle}" whose Markdown contains exactly the heading "# ${artifactToken}" and one short sentence. After the tool succeeds, reply briefly.`,
+    `For a native end-to-end test, call artifact_publish exactly once and no other tool. Use mode "create", title "${artifactTitle}", and payload kind "markdown" with schema "guruterminal-markdown/1". Its Markdown must have this exact structure: first line "# ${artifactToken}"; one blank line; then the single sentence "A short sentence." After the tool succeeds, reply briefly.`,
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
 
-  const progress = await displayed('[aria-label="Work progress"]', 60_000);
+  const progress = await latestWorkProgressAfter(previousProgressCount);
   assert.equal(
     await progress.$("button.chat-progress-toggle").getAttribute("aria-expanded"),
     "true",
   );
-  await waitForText(progress, "Published a Chat artifact", 60_000);
+  await browser.waitUntil(
+    async () => {
+      for (const article of await browser.$$("article.message.assistant.error")) {
+        if (await isVisible(article)) {
+          throw new Error("artifact: the Chat turn failed before publishing its artifact");
+        }
+      }
+      return (await progress.getText()).includes("Published a Chat artifact");
+    },
+    {
+      timeout: FIRST_TOOL_PROGRESS_TIMEOUT_MS,
+      interval: 500,
+      timeoutMsg: "artifact: timed out waiting for publish progress",
+    },
+  );
+  acceptanceObservations.artifact = {
+    firstToolProgressMs: Date.now() - turnStartedAt,
+  };
 
   await browser.waitUntil(
     async () =>
@@ -1313,7 +1384,17 @@ async function runRestartedMemoryReuseTurn() {
 }
 
 try {
-  if (phase === "smoke" || phase === "run") {
+  if (
+    [
+      "smoke",
+      "run",
+      "artifact",
+      "artifact-memory",
+      "artifact-after-finance",
+      "artifact-after-finance-warm",
+      "artifact-after-finance-no-history",
+    ].includes(phase)
+  ) {
     await createLiveAgent();
     await connectExistingPiProfile();
     await clickButton("Chat");
@@ -1326,6 +1407,35 @@ try {
     await persistWorkProgress("smoke");
     await screenshot("smoke");
     console.log("Native Luna max Chat smoke passed.");
+  } else if (phase === "artifact") {
+    await setComposerCheckbox("Use memory", false);
+    await setComposerCheckbox("Update memory", false);
+    await runArtifactTurn();
+    await persistWorkProgress("artifact");
+    console.log("Native Luna max Chat artifact smoke passed.");
+  } else if (phase === "artifact-memory") {
+    await runArtifactTurn();
+    await persistWorkProgress("artifact-memory");
+    console.log("Native Luna max Chat artifact-memory smoke passed.");
+  } else if (phase === "artifact-after-finance") {
+    await runFinanceCoreTurn();
+    await runArtifactTurn();
+    await persistWorkProgress("artifact-after-finance");
+    console.log("Native Luna max Chat artifact-after-finance smoke passed.");
+  } else if (phase === "artifact-after-finance-warm") {
+    await runFinanceCoreTurn();
+    await assertLunaMaxSelection("after Finance");
+    await setComposerCheckbox("Use memory", false);
+    await setComposerCheckbox("Update memory", false);
+    await assertLunaMaxSelection("before warm Artifact");
+    await runArtifactTurn();
+    await persistWorkProgress("artifact-after-finance-warm");
+    console.log("Native Luna max Chat artifact-after-finance-warm smoke passed.");
+  } else if (phase === "artifact-after-finance-no-history") {
+    await runFinanceCoreTurn();
+    await runArtifactTurn();
+    await persistWorkProgress("artifact-after-finance-no-history");
+    console.log("Native Luna max Chat artifact-after-finance-no-history smoke passed.");
   } else if (phase === "run") {
     await runFinanceCoreTurn();
     await runWorldBankMacroTurn();

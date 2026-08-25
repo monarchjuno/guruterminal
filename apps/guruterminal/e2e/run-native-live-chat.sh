@@ -8,11 +8,15 @@ STATE_ROOT=
 RUN_LOG=
 APP_PID=
 REQUESTED_PHASE=${1:-all}
+COLD_HISTORY_MODE=
 
 case "$REQUESTED_PHASE" in
-    all|smoke) ;;
+    all|smoke|artifact|artifact-memory|artifact-after-finance|artifact-after-finance-warm) ;;
+    artifact-after-finance-no-history)
+        COLD_HISTORY_MODE=1
+        ;;
     *)
-        echo "usage: $0 [smoke]" >&2
+        echo "usage: $0 [smoke|artifact|artifact-memory|artifact-after-finance|artifact-after-finance-warm|artifact-after-finance-no-history]" >&2
         exit 2
         ;;
 esac
@@ -87,6 +91,7 @@ run_phase() {
     rm -f -- "$SESSION_INFO"
     GURUTERMINAL_E2E_STATE_DIR="$STATE_ROOT" \
         GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR="$GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR" \
+        GURUTERMINAL_E2E_OMIT_COLD_HISTORY="$COLD_HISTORY_MODE" \
         "$SCRIPT_DIR/run-app.sh" >"$RUN_LOG" 2>&1 &
     APP_PID=$!
 
@@ -101,9 +106,13 @@ run_phase() {
     wait_for_dev_server_exit
 }
 
-if [ "$REQUESTED_PHASE" = "smoke" ]; then
-    run_phase smoke
-    echo "Guru Terminal native Luna max Chat smoke passed."
+if [ "$REQUESTED_PHASE" = "smoke" ] || [ "$REQUESTED_PHASE" = "artifact" ] || \
+    [ "$REQUESTED_PHASE" = "artifact-memory" ] || \
+    [ "$REQUESTED_PHASE" = "artifact-after-finance" ] || \
+    [ "$REQUESTED_PHASE" = "artifact-after-finance-warm" ] || \
+    [ "$REQUESTED_PHASE" = "artifact-after-finance-no-history" ]; then
+    run_phase "$REQUESTED_PHASE"
+    echo "Guru Terminal native Luna max Chat $REQUESTED_PHASE smoke passed."
 else
     run_phase run
     run_phase verify

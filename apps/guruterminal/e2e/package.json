@@ -10,6 +10,11 @@
   "scripts": {
     "test:live-chat": "./run-native-live-chat.sh",
     "test:live-chat:smoke": "./run-native-live-chat.sh smoke",
+    "test:live-chat:artifact": "./run-native-live-chat.sh artifact",
+    "test:live-chat:artifact-memory": "./run-native-live-chat.sh artifact-memory",
+    "test:live-chat:artifact-after-finance": "./run-native-live-chat.sh artifact-after-finance",
+    "test:live-chat:artifact-after-finance-warm": "./run-native-live-chat.sh artifact-after-finance-warm",
+    "test:live-chat:artifact-after-finance-no-history": "./run-native-live-chat.sh artifact-after-finance-no-history",
     "test:native": "./run-native-smoke.sh",
     "test:native:full": "./run-native-smoke.sh --full",
     "test:persistence": "./run-native-persistence.sh",

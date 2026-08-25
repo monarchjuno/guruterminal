@@ -160,6 +160,30 @@ cd apps/guruterminal/e2e
 GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:smoke
 ```
 
+To isolate the actual Artifact publish/viewer path in a fresh Chat, run:
+
+```bash
+cd apps/guruterminal/e2e
+GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:artifact
+```
+
+This is a focused regression check; it does not replace the full live suite.
+
+For diagnosing the Artifact turn after Finance Core, the focused variants keep
+the same fresh Chat but respectively retain Memory, make the Artifact turn cold
+after Finance, or keep both Memory flags disabled so Artifact warm-resumes the
+Finance cache:
+
+```bash
+GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:artifact-memory
+GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:artifact-after-finance
+GURUTERMINAL_LIVE_PI_AGENT_DATA_DIR=/absolute/path/to/disposable/pi npm run test:live-chat:artifact-after-finance-warm
+```
+
+`test:live-chat:artifact-after-finance-no-history` is an E2E-only diagnostic
+for the cold-launch path. It deliberately suppresses restored transcript data
+in the isolated binary and must not be used as a product acceptance check.
+
 `test:live-chat` verifies a visible Luna/max streamed assistant delta, Finance
 Core capability discovery/load plus a deterministic percentage calculation, the
 default World Bank macro-data component through its native public API, and the
@@ -170,8 +194,9 @@ component through public search plus a fixed public fetch, Work progress for
 compute / artifact / evidence / chart / decision,
 Memory `$wiki` and `$lens` teach-then-apply, and a restarted new Chat that
 semantically searches and exact-reads both records rather than relying on the
-prior transcript. It covers Memory view titles, Stop, session compaction without
-error, a follow-up turn after the long sequence, and restart persistence.
+prior transcript. It covers Memory view titles, Stop, rejects any observed
+session-compaction error, a follow-up turn after the long sequence, and restart
+persistence.
 Deterministic Rust and native tests remain authoritative for Memory write
 integrity, Wiki/Lens policy enforcement, recovery, concurrency, and
 release-only boundaries.
