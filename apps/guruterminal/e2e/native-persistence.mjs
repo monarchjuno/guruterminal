@@ -83,6 +83,27 @@ tags:
 The imported quality covenant keeps cash conversion above reported earnings before a valuation multiple can expand.`;
 const IMPORTED_WIKI_EDIT_MARKER = "Native persistence Wiki edit marker";
 const MEMORY_WRITE_TIMEOUT_MS = 60_000;
+// The embedded WebDriver can report ready before the newly started WebView has
+// loaded the Vite renderer. This is especially visible on a warm second Tauri
+// launch on Windows: the session opens against an otherwise blank document.
+// Treat the visible shell, rather than the WebDriver endpoint, as the phase
+// boundary and give it the normal native startup allowance.
+const APP_SHELL_READY_TIMEOUT_MS = 90_000;
+
+async function waitForApplicationShell() {
+  console.log(`native persistence ${phase}: waiting for rendered application shell`);
+  const startedAt = Date.now();
+  const main = await displayed("main", APP_SHELL_READY_TIMEOUT_MS);
+  const remaining = Math.max(
+    1_000,
+    APP_SHELL_READY_TIMEOUT_MS - (Date.now() - startedAt),
+  );
+  const navigation = await displayed(
+    '[aria-label="Application navigation"]',
+    remaining,
+  );
+  return { main, navigation };
+}
 
 async function navigateTo(text) {
   for (const button of await browser.$$("button")) {
@@ -347,7 +368,7 @@ async function assertImportedMemoryIsDeleted(record) {
 
 try {
   if (phase === "seed") {
-    const onboarding = await displayed("main");
+    const { main: onboarding } = await waitForApplicationShell();
     await waitForText(onboarding, "Connect a model provider");
     await clickButton("Agents");
     const agents = await displayed("#main-panel-agents");
@@ -383,7 +404,7 @@ try {
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-seed.png"));
     console.log("Native persistence seed with Memory import edit, Revert, and delete passed.");
   } else {
-    const navigation = await displayed('[aria-label="Application navigation"]');
+    const { main: onboarding, navigation } = await waitForApplicationShell();
     await waitForText(navigation, "Persistent E2E Agent");
     await (await displayed('button[title="Persistent E2E Agent"]')).click();
     await waitForText(navigation, "Persistent session");
@@ -393,7 +414,6 @@ try {
     await clickButton("Chat");
     assert.equal(await (await displayed("#main-tab-chat")).getAttribute("aria-current"), "page");
     await waitForText(await displayed('[aria-label="Application navigation"]'), "Persistent session");
-    const onboarding = await displayed("main");
     await waitForText(onboarding, "Connect a model provider");
     assert.equal(
       (await browser.$$('textarea[aria-label="Message Guru"]')).length,

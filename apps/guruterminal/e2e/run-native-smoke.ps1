@@ -26,7 +26,7 @@ $TauriConfig = Join-Path $AppRoot "src-tauri/tauri.e2e.conf.json"
 $RemoveStateRoot = $false
 $TauriProcess = $null
 $TauriOutputCapture = $null
-$StartupFailure = $false
+$EmitLauncherDiagnostics = $false
 $HttpHandler = $null
 $HttpClient = $null
 $LauncherLogTailLineCount = 80
@@ -346,7 +346,7 @@ function Wait-ForOwnedWebDriver(
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (-not (Test-ProcessRunning $RootProcessId)) {
-            $script:StartupFailure = $true
+            $script:EmitLauncherDiagnostics = $true
             throw "Guru Terminal launcher exited before WebDriver became ready."
         }
         if (
@@ -359,7 +359,7 @@ function Wait-ForOwnedWebDriver(
     }
 
     $listeners = (Get-ListeningProcessIds $Port) -join ", "
-    $script:StartupFailure = $true
+    $script:EmitLauncherDiagnostics = $true
     throw (
         "Guru Terminal WebDriver did not become ready and owned within " +
         "$TimeoutMilliseconds milliseconds (listening PIDs: $listeners)."
@@ -557,6 +557,7 @@ try {
         }
         & $NodeBinary $NativeSmoke @smokeArgs
         if ($LASTEXITCODE -ne 0) {
+            $EmitLauncherDiagnostics = $true
             throw "Guru Terminal native Windows smoke failed."
         }
         Write-Host "Guru Terminal native Windows smoke passed."
@@ -564,6 +565,7 @@ try {
     else {
         & $NodeBinary $NativePersistence $SessionInfo $PersistencePhase
         if ($LASTEXITCODE -ne 0) {
+            $EmitLauncherDiagnostics = $true
             throw "Guru Terminal native Windows persistence $PersistencePhase phase failed."
         }
         Write-Host "Guru Terminal native Windows persistence $PersistencePhase phase passed."
@@ -575,7 +577,7 @@ finally {
     }
     if ($null -ne $TauriOutputCapture) {
         Complete-ProcessOutputCapture $TauriOutputCapture
-        if ($StartupFailure) {
+        if ($EmitLauncherDiagnostics) {
             Write-LauncherLogTails $TauriOutputCapture
         }
     }
