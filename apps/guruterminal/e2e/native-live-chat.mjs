@@ -1438,10 +1438,14 @@ try {
     console.log("Native Luna max Chat artifact-after-finance-no-history smoke passed.");
   } else if (phase === "run") {
     await runFinanceCoreTurn();
+    await assertLunaMaxSelection("after Finance");
+    await setComposerCheckbox("Use memory", false);
+    await setComposerCheckbox("Update memory", false);
+    await assertLunaMaxSelection("before warm Artifact");
+    await runArtifactTurn();
     await runWorldBankMacroTurn();
     await runOpenbbKeylessTurn();
     await runWebResearchTurn();
-    await runArtifactTurn();
     await runEvidenceChartDecisionTurn();
     await runLearnThenCiteTurns();
     await runLensTeachThenApplyTurns();

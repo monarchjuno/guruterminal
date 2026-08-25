@@ -19,7 +19,7 @@ const browser = await remote({
 const artifactRoot = resolve(e2eRoot, "artifacts");
 await mkdir(artifactRoot, { recursive: true });
 
-const { displayed, clickButton, waitForText } = createWebdriverHelpers(
+const { displayed, clickButton, waitForText, waitForTextGone } = createWebdriverHelpers(
   browser,
   { defaultTimeout: 10_000, bodyTextLimit: 16_000 },
 );
@@ -51,6 +51,26 @@ const IMPORTED_RECORDS = [
     detail: "downside review ahead of a larger allocation",
   },
 ];
+const IMPORTED_WIKI = IMPORTED_RECORDS[0];
+const IMPORTED_WIKI_BODY = `# Covenant
+
+The imported quality covenant keeps cash conversion above reported earnings before a valuation multiple can expand.`;
+const IMPORTED_WIKI_MARKDOWN = `---
+id: wiki:import/quality-covenant
+title: Imported Quality Covenant
+summary: A durable cash conversion covenant for the Native Memory import fixture.
+as_of: 2026-08-20T00:00:00Z
+entities:
+  - Native Import Co.
+tags:
+  - import-fixture
+  - quality
+---
+
+# Covenant
+
+The imported quality covenant keeps cash conversion above reported earnings before a valuation multiple can expand.`;
+const IMPORTED_WIKI_EDIT_MARKER = "Native persistence Wiki edit marker";
 
 async function navigateTo(text) {
   for (const button of await browser.$$("button")) {
@@ -143,6 +163,62 @@ async function assertImportedMemory() {
   await waitForText(library, "4 pages.");
 }
 
+async function openImportedMemory(record) {
+  await navigateTo("Memory");
+  const library = await displayed("#main-panel-library");
+  const search = await displayed('input[placeholder="Search memory"]');
+  const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
+  if ((await kindFilter.getAttribute("aria-pressed")) !== "true") {
+    await kindFilter.click();
+  }
+  await search.setValue(record.query);
+  const selector = `button[aria-label^="Open ${record.title} ("]`;
+  await browser.waitUntil(
+    async () => {
+      const labels = [];
+      for (const button of await library.$$("button[data-library-result]")) {
+        if (await button.isDisplayed()) {
+          labels.push(await button.getAttribute("aria-label"));
+        }
+      }
+      return labels.length === 1 && labels[0]?.startsWith(`Open ${record.title} (`);
+    },
+    {
+      timeout: 10_000,
+      interval: 100,
+      timeoutMsg: `Search did not return only ${record.title}`,
+    },
+  );
+  await (await displayed(selector)).click();
+  await waitForText(library, record.detail);
+  return library;
+}
+
+async function assertImportedWikiIsRestored() {
+  const library = await openImportedMemory(IMPORTED_WIKI);
+  await clickButton("Raw", library);
+  const raw = await displayed("pre.raw-markdown");
+  const markdown = (await raw.getText()).trim();
+  assert.equal(markdown, IMPORTED_WIKI_MARKDOWN);
+  assert.equal(markdown.includes(IMPORTED_WIKI_EDIT_MARKER), false);
+  await clickButton("Rendered", library);
+  await waitForText(library, IMPORTED_WIKI.detail);
+}
+
+async function editAndRevertImportedWiki() {
+  const library = await openImportedMemory(IMPORTED_WIKI);
+  await clickButton("Edit", library);
+  const editor = await displayed('[aria-label="Edit memory"]');
+  const body = await displayed("textarea.memory-markdown-editor");
+  assert.equal(await body.getValue(), IMPORTED_WIKI_BODY);
+  await body.setValue(`${IMPORTED_WIKI_BODY}\n\n${IMPORTED_WIKI_EDIT_MARKER}`);
+  await clickButton("Save memory", editor);
+  await waitForText(library, IMPORTED_WIKI_EDIT_MARKER, 20_000);
+  await clickButton("Revert", library);
+  await waitForTextGone(library, IMPORTED_WIKI_EDIT_MARKER, 20_000);
+  await assertImportedWikiIsRestored();
+}
+
 try {
   if (phase === "seed") {
     const onboarding = await displayed("main");
@@ -174,8 +250,9 @@ try {
     await waitForText(agentsAfterSession, IMPORTED_AGENT);
     await selectImportedAgent();
     await assertImportedMemory();
+    await editAndRevertImportedWiki();
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-seed.png"));
-    console.log("Native persistence seed with Memory import passed.");
+    console.log("Native persistence seed with Memory import edit and Revert passed.");
   } else {
     const navigation = await displayed('[aria-label="Application navigation"]');
     await waitForText(navigation, "Persistent E2E Agent");
@@ -197,8 +274,9 @@ try {
     await clickButton("Agents");
     await selectImportedAgent();
     await assertImportedMemory();
+    await assertImportedWikiIsRestored();
     await browser.saveScreenshot(resolve(artifactRoot, "native-persistence-verify.png"));
-    console.log("Native persistence restart with imported Memory passed.");
+    console.log("Native persistence restart with reverted imported Memory passed.");
   }
 } catch (error) {
   await browser.saveScreenshot(
