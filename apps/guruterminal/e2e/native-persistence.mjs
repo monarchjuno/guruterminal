@@ -105,6 +105,43 @@ async function waitForApplicationShell() {
   return { main, navigation };
 }
 
+async function selectNavigationAgent(navigation, name) {
+  await browser.waitUntil(
+    async () => {
+      for (const candidate of await navigation.$$("button.guru-nav-item")) {
+        if (
+          (await candidate.isDisplayed()) &&
+          (await candidate.getText()).trim() === name
+        ) {
+          return candidate.isEnabled();
+        }
+      }
+      return false;
+    },
+    {
+      timeout: APP_SHELL_READY_TIMEOUT_MS,
+      interval: 100,
+      timeoutMsg: `Navigation agent did not become ready: ${name}`,
+    },
+  );
+  const agent = await childWithText(
+    navigation,
+    "button.guru-nav-item",
+    name,
+    APP_SHELL_READY_TIMEOUT_MS,
+  );
+  await agent.click();
+  // Selecting an Agent reads its persisted workspace before React marks its
+  // navigation item current. On a cold Windows runner that can outlast the
+  // ordinary UI polling timeout, even though the saved session is intact.
+  await childWithText(
+    navigation,
+    'button.guru-nav-item[aria-current="page"]',
+    name,
+    APP_SHELL_READY_TIMEOUT_MS,
+  );
+}
+
 async function navigateTo(text) {
   for (const button of await browser.$$("button")) {
     if ((await button.isDisplayed()) && (await button.getText()).trim() === text) {
@@ -406,8 +443,12 @@ try {
   } else {
     const { main: onboarding, navigation } = await waitForApplicationShell();
     await waitForText(navigation, "Persistent E2E Agent");
-    await (await displayed('button[title="Persistent E2E Agent"]')).click();
-    await waitForText(navigation, "Persistent session");
+    await selectNavigationAgent(navigation, "Persistent E2E Agent");
+    await waitForText(
+      navigation,
+      "Persistent session",
+      APP_SHELL_READY_TIMEOUT_MS,
+    );
     await clickButton("Agents");
     const agents = await displayed("#main-panel-agents");
     await waitForText(agents, "Persistent E2E Agent");
