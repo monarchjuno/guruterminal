@@ -1,5 +1,11 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$Full,
+    [ValidateSet("seed", "verify")]
+    [string]$PersistencePhase,
+    [string]$StateRoot,
+    [string]$ImportRoot
+)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -14,9 +20,10 @@ $ArtifactDir = Join-Path $ScriptDir "artifacts"
 $SessionInfo = Join-Path $ArtifactDir "current-session.json"
 $WaitSession = Join-Path $ScriptDir "wait-session.mjs"
 $NativeSmoke = Join-Path $ScriptDir "native-smoke.mjs"
+$NativePersistence = Join-Path $ScriptDir "native-persistence.mjs"
 $TauriCli = Join-Path $AppRoot "node_modules/@tauri-apps/cli/tauri.js"
 $TauriConfig = Join-Path $AppRoot "src-tauri/tauri.e2e.conf.json"
-$StateRoot = $null
+$RemoveStateRoot = $false
 $TauriProcess = $null
 $TauriOutputCapture = $null
 $StartupFailure = $false
@@ -47,6 +54,19 @@ function Read-PositiveIntegerEnvironment([string]$Name, [int]$Fallback) {
         throw "$Name must be a positive integer."
     }
     return $parsed
+}
+
+function Resolve-RealAbsoluteDirectory([string]$Path, [string]$Name) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [System.IO.Path]::IsPathRooted($Path)) {
+        throw "$Name must be an absolute directory."
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw "$Name must be a real directory."
+    }
+
+    return $item.FullName
 }
 
 function Resolve-RequestedPort([string]$NodeBinary) {
@@ -379,7 +399,8 @@ function Stop-StartedProcessTree([System.Diagnostics.Process]$RootProcess) {
 function New-CleanTauriProcessInfo(
     [string]$NodeBinary,
     [string]$AppDataDirectory,
-    [int]$WebDriverPort
+    [int]$WebDriverPort,
+    [string]$ImportDirectory
 ) {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $NodeBinary
@@ -450,8 +471,27 @@ function New-CleanTauriProcessInfo(
         }
     }
     $startInfo.Environment["GURUTERMINAL_E2E_APP_DATA_DIR"] = $AppDataDirectory
+    if (-not [string]::IsNullOrWhiteSpace($ImportDirectory)) {
+        $startInfo.Environment["GURUTERMINAL_E2E_IMPORT_DIR"] = $ImportDirectory
+    }
     $startInfo.Environment["TAURI_WEBDRIVER_PORT"] = [string]$WebDriverPort
     return $startInfo
+}
+
+if ($Full -and -not [string]::IsNullOrWhiteSpace($PersistencePhase)) {
+    throw "-Full cannot be combined with -PersistencePhase."
+}
+if ([string]::IsNullOrWhiteSpace($PersistencePhase)) {
+    if (
+        -not [string]::IsNullOrWhiteSpace($StateRoot) -or
+        -not [string]::IsNullOrWhiteSpace($ImportRoot)
+    ) {
+        throw "-StateRoot and -ImportRoot require -PersistencePhase."
+    }
+}
+else {
+    $StateRoot = Resolve-RealAbsoluteDirectory $StateRoot "-StateRoot"
+    $ImportRoot = Resolve-RealAbsoluteDirectory $ImportRoot "-ImportRoot"
 }
 
 try {
@@ -467,9 +507,12 @@ try {
     New-Item -ItemType Directory -Path $ArtifactDir -Force | Out-Null
     Remove-Item -LiteralPath $SessionInfo -Force -ErrorAction SilentlyContinue
 
-    $StateRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
-        "guruterminal-e2e-" + [Guid]::NewGuid().ToString("N")
-    )
+    if ([string]::IsNullOrWhiteSpace($StateRoot)) {
+        $StateRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+            "guruterminal-e2e-" + [Guid]::NewGuid().ToString("N")
+        )
+        $RemoveStateRoot = $true
+    }
     $AppDataDirectory = Join-Path $StateRoot "app-data"
     New-Item -ItemType Directory -Path $AppDataDirectory -Force | Out-Null
 
@@ -482,7 +525,11 @@ try {
     Write-Host "Guru Terminal E2E state: $AppDataDirectory"
     Write-Host "Guru Terminal E2E WebDriver: http://127.0.0.1:$WebDriverPort"
 
-    $processInfo = New-CleanTauriProcessInfo $NodeBinary $AppDataDirectory $WebDriverPort
+    $processInfo = New-CleanTauriProcessInfo `
+        $NodeBinary `
+        $AppDataDirectory `
+        $WebDriverPort `
+        $ImportRoot
     $TauriProcess = [System.Diagnostics.Process]::Start($processInfo)
     if ($null -eq $TauriProcess) {
         throw "Guru Terminal E2E launcher did not start."
@@ -503,11 +550,24 @@ try {
         throw "Unable to write the Guru Terminal E2E session."
     }
 
-    & $NodeBinary $NativeSmoke $SessionInfo
-    if ($LASTEXITCODE -ne 0) {
-        throw "Guru Terminal native Windows smoke failed."
+    if ([string]::IsNullOrWhiteSpace($PersistencePhase)) {
+        $smokeArgs = @($SessionInfo)
+        if ($Full) {
+            $smokeArgs += "--full"
+        }
+        & $NodeBinary $NativeSmoke @smokeArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Guru Terminal native Windows smoke failed."
+        }
+        Write-Host "Guru Terminal native Windows smoke passed."
     }
-    Write-Host "Guru Terminal native Windows smoke passed."
+    else {
+        & $NodeBinary $NativePersistence $SessionInfo $PersistencePhase
+        if ($LASTEXITCODE -ne 0) {
+            throw "Guru Terminal native Windows persistence $PersistencePhase phase failed."
+        }
+        Write-Host "Guru Terminal native Windows persistence $PersistencePhase phase passed."
+    }
 }
 finally {
     if ($null -ne $TauriProcess) {
@@ -526,7 +586,7 @@ finally {
         $HttpHandler.Dispose()
     }
     Remove-Item -LiteralPath $SessionInfo -Force -ErrorAction SilentlyContinue
-    if ($null -ne $StateRoot) {
+    if ($RemoveStateRoot -and $null -ne $StateRoot) {
         Remove-Item -LiteralPath $StateRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
