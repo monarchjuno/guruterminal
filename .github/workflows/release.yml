@@ -140,6 +140,24 @@ jobs:
           }
           echo "verified exact-source CI run $VERIFIED_RUN_ID"
 
+      - name: Require contiguous release candidates
+        if: steps.identity.outputs.prerelease == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PUBLISHED_TAGS="$RUNNER_TEMP/published-release-tags.txt"
+          gh api --paginate \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .published_at != null) | .tag_name' \
+            > "$PUBLISHED_TAGS"
+          python3 apps/guruterminal/scripts/release-qualification.py rc-sequence \
+            --candidate-tag "$GITHUB_REF_NAME" \
+            --published-tags "$PUBLISHED_TAGS"
+
       - name: Require dated changelog for stable release
         if: steps.identity.outputs.prerelease == 'false'
         shell: bash
