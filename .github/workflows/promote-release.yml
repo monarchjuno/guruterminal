@@ -49,7 +49,10 @@ jobs:
           set -euo pipefail
           [[ "$CANDIDATE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ "$QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = "$CANDIDATE_TAG"
           SOURCE_COMMIT="$(git rev-parse HEAD)"
+          test "$(git rev-parse "$GITHUB_SHA^{commit}")" = "$SOURCE_COMMIT"
           gh api --paginate --slurp \
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \

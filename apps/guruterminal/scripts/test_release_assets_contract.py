@@ -22,6 +22,7 @@ from release_asset_contract import (  # noqa: E402
 
 
 SCRIPTS = Path(__file__).resolve().parent
+REPOSITORY_ROOT = SCRIPTS.parents[2]
 VERSION = "0.0.1"
 TAG = f"v{VERSION}"
 REPOSITORY = "monarchjuno/guruterminal"
@@ -354,8 +355,22 @@ class ReleaseAssetsContractTest(unittest.TestCase):
                 "https://evidence.example.test/windows",
                 "--windows-candidate-set-sha256",
                 candidate_digest,
+                "--macos-product-acceptance-evidence-url",
+                "https://evidence.example.test/macos-product-acceptance",
+                "--windows-product-acceptance-evidence-url",
+                "https://evidence.example.test/windows-product-acceptance",
                 "--output",
                 str(receipt),
+            )
+            sealed = json.loads(receipt.read_text(encoding="utf-8"))
+            self.assertEqual(sealed["schema_version"], 2)
+            self.assertEqual(
+                sealed["product_acceptance"]["macos-aarch64"],
+                {
+                    "result": "passed",
+                    "evidence_url": "https://evidence.example.test/macos-product-acceptance",
+                    "candidate_set_sha256": candidate_digest,
+                },
             )
             self.assert_script_succeeds(
                 "release-qualification.py",
@@ -375,6 +390,57 @@ class ReleaseAssetsContractTest(unittest.TestCase):
                 "--receipt",
                 str(receipt),
             )
+            sealed["product_acceptance"]["windows-x86_64"]["candidate_set_sha256"] = (
+                "0" * 64
+            )
+            receipt.write_text(
+                json.dumps(sealed, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            completed = self.run_script(
+                "release-qualification.py",
+                "verify",
+                "--candidate-tag",
+                TAG,
+                "--repository",
+                REPOSITORY,
+                "--source-commit",
+                SOURCE_COMMIT,
+                "--release-id",
+                "99",
+                "--release-metadata",
+                str(assets / "RELEASE-METADATA.json"),
+                "--workflow-run-id",
+                "100",
+                "--receipt",
+                str(receipt),
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("product acceptance candidate-set digest", completed.stderr)
+
+    def test_promotion_requires_the_candidate_tag_workflow_ref(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/promote-release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('test "$GITHUB_REF_TYPE" = tag', workflow)
+        self.assertIn('test "$GITHUB_REF_NAME" = "$CANDIDATE_TAG"', workflow)
+        self.assertIn('git rev-parse "$GITHUB_SHA^{commit}"', workflow)
+
+    def test_qualification_seals_signed_product_acceptance_evidence(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/release-qualification.yml"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "macos_product_acceptance_evidence_url:",
+            "windows_product_acceptance_evidence_url:",
+            "confirm_macos_product_acceptance:",
+            "confirm_windows_product_acceptance:",
+            'test "$CONFIRM_MACOS_PRODUCT_ACCEPTANCE" = true',
+            'test "$CONFIRM_WINDOWS_PRODUCT_ACCEPTANCE" = true',
+            "--macos-product-acceptance-evidence-url",
+            "--windows-product-acceptance-evidence-url",
+        ):
+            self.assertIn(required, workflow)
 
     def test_stable_qualification_sequence_requires_latest_after_first_release(
         self,
