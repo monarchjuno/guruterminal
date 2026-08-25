@@ -38,13 +38,22 @@ def configured_rulesets() -> list[dict[str, object]]:
         {
             "target": "tag",
             "enforcement": "active",
+            "bypass_actors": [
+                {
+                    "actor_id": 1,
+                    "actor_type": "User",
+                    "bypass_mode": "always",
+                }
+            ],
+            "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
+            "rules": [{"type": "creation"}],
+        },
+        {
+            "target": "tag",
+            "enforcement": "active",
             "bypass_actors": [],
             "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
-            "rules": [
-                {"type": "creation"},
-                {"type": "update"},
-                {"type": "deletion"},
-            ],
+            "rules": [{"type": "update"}, {"type": "deletion"}],
         },
     ]
 
@@ -208,7 +217,13 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                 {
                     "target": "tag",
                     "enforcement": "active",
-                    "bypass_actors": [],
+                    "bypass_actors": [
+                        {
+                            "actor_id": 1,
+                            "actor_type": "User",
+                            "bypass_mode": "always",
+                        }
+                    ],
                     "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
                     "rules": [{"type": "creation"}],
                 },
@@ -220,7 +235,7 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             {"main protection", "release tags"},
         )
 
-    def test_ruleset_bypass_actors_must_be_explicitly_empty(self) -> None:
+    def test_main_and_tag_immutability_rulesets_require_no_bypass(self) -> None:
         cases: tuple[tuple[str, str, object], ...] = (
             ("main omitted", "main protection", None),
             (
@@ -234,9 +249,9 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                     }
                 ],
             ),
-            ("tag omitted", "release tags", None),
+            ("tag immutability omitted", "release tags", None),
             (
-                "tag actor",
+                "tag immutability actor",
                 "release tags",
                 [
                     {
@@ -246,12 +261,12 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                     }
                 ],
             ),
-            ("tag malformed", "release tags", {}),
+            ("tag immutability malformed", "release tags", {}),
         )
         for label, subject, bypass_actors in cases:
             with self.subTest(label=label):
                 rulesets = configured_rulesets()
-                ruleset = rulesets[0 if subject == "main protection" else 1]
+                ruleset = rulesets[0 if subject == "main protection" else 2]
                 if bypass_actors is None:
                     ruleset.pop("bypass_actors")
                 else:
@@ -261,6 +276,63 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                     finding.subject for finding in findings if finding.level == "error"
                 }
                 self.assertIn(subject, errors)
+
+    def test_tag_creation_requires_one_creation_only_controlled_allowlist(
+        self,
+    ) -> None:
+        cases: tuple[str, ...] = (
+            "missing bypass actors",
+            "empty bypass actors",
+            "wrong bypass mode",
+            "malformed actor",
+            "combined with immutability",
+            "additional creation rule",
+        )
+        for label in cases:
+            with self.subTest(label=label):
+                rulesets = configured_rulesets()
+                creator_rule = rulesets[1]
+                if label == "missing bypass actors":
+                    creator_rule.pop("bypass_actors")
+                elif label == "empty bypass actors":
+                    creator_rule["bypass_actors"] = []
+                elif label == "wrong bypass mode":
+                    creator_rule["bypass_actors"] = [
+                        {
+                            "actor_id": 1,
+                            "actor_type": "User",
+                            "bypass_mode": "pull_request",
+                        }
+                    ]
+                elif label == "malformed actor":
+                    creator_rule["bypass_actors"] = [
+                        {
+                            "actor_id": True,
+                            "actor_type": "User",
+                            "bypass_mode": "always",
+                        }
+                    ]
+                elif label == "combined with immutability":
+                    creator_rule["rules"] = [
+                        {"type": "creation"},
+                        {"type": "update"},
+                        {"type": "deletion"},
+                    ]
+                else:
+                    rulesets.append(
+                        {
+                            "target": "tag",
+                            "enforcement": "active",
+                            "bypass_actors": [],
+                            "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
+                            "rules": [{"type": "creation"}],
+                        }
+                    )
+                findings = self.audit(rulesets=rulesets)
+                errors = {
+                    finding.subject for finding in findings if finding.level == "error"
+                }
+                self.assertIn("release tags", errors)
 
     def test_legacy_main_protection_must_require_a_pull_request(self) -> None:
         rulesets = configured_rulesets()[1:]

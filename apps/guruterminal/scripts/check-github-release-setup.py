@@ -29,7 +29,11 @@ TAG_TRIGGERED_ENVIRONMENTS = frozenset(REQUIRED_ENVIRONMENTS)
 REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
 MAIN_BRANCH_RULE_TYPES = frozenset(("pull_request",))
-RELEASE_TAG_RULE_TYPES = frozenset(("creation", "update", "deletion"))
+RELEASE_TAG_IMMUTABILITY_RULE_TYPES = frozenset(("update", "deletion"))
+RELEASE_TAG_CREATION_RULE_TYPES = frozenset(("creation",))
+RELEASE_TAG_CREATOR_ACTOR_TYPES = frozenset(
+    ("User", "Team", "Integration", "RepositoryRole", "OrganizationAdmin")
+)
 
 
 class AuditError(RuntimeError):
@@ -74,18 +78,18 @@ def matches_ref_pattern(pattern: str, ref: str, default_ref: str) -> bool:
     return fnmatchcase(ref, pattern)
 
 
-def has_required_rule_types(value: object, required_types: frozenset[str]) -> bool:
+def rule_types(value: object) -> set[str] | None:
     if not isinstance(value, list):
-        return False
+        return None
     types: set[str] = set()
     for rule in value:
         if not isinstance(rule, dict):
-            return False
+            return None
         rule_type = rule.get("type")
         if not isinstance(rule_type, str) or not rule_type:
-            return False
+            return None
         types.add(rule_type)
-    return required_types <= types
+    return types
 
 
 def ruleset_has_no_bypass_actors(ruleset: dict[str, object]) -> bool:
@@ -100,22 +104,42 @@ def ruleset_has_no_bypass_actors(ruleset: dict[str, object]) -> bool:
     return "bypass_actors" in ruleset and ruleset.get("bypass_actors") == []
 
 
-def active_ruleset_protects(
-    ruleset: object,
+def ruleset_has_controlled_creation_bypass(ruleset: dict[str, object]) -> bool:
+    """Require an explicit, well-formed creator allowlist for a creation-only rule.
+
+    A no-bypass ``creation`` rule would prevent every release tag from being
+    created. The matching update/deletion rule is separately no-bypass, so a
+    narrowly scoped creator allowlist here cannot make an existing tag mutable.
+    """
+
+    actors = ruleset.get("bypass_actors")
+    if not isinstance(actors, list) or not actors:
+        return False
+    for actor in actors:
+        if not isinstance(actor, dict):
+            return False
+        actor_id = actor.get("actor_id")
+        if (
+            not isinstance(actor_id, int)
+            or isinstance(actor_id, bool)
+            or actor_id < 1
+            or actor.get("actor_type") not in RELEASE_TAG_CREATOR_ACTOR_TYPES
+            or actor.get("bypass_mode") != "always"
+        ):
+            return False
+    return True
+
+
+def active_ruleset_applies_to_ref(
+    ruleset: dict[str, object],
     *,
     target: str,
     ref: str,
     default_ref: str,
-    required_rule_types: frozenset[str],
 ) -> bool:
-    value = require_object(ruleset, "repository ruleset")
-    if value.get("target") != target or value.get("enforcement") != "active":
+    if ruleset.get("target") != target or ruleset.get("enforcement") != "active":
         return False
-    if not ruleset_has_no_bypass_actors(value):
-        return False
-    if not has_required_rule_types(value.get("rules"), required_rule_types):
-        return False
-    conditions = value.get("conditions")
+    conditions = ruleset.get("conditions")
     if not isinstance(conditions, dict):
         return False
     ref_name = conditions.get("ref_name")
@@ -133,6 +157,29 @@ def active_ruleset_protects(
     )
 
 
+def active_ruleset_protects(
+    ruleset: object,
+    *,
+    target: str,
+    ref: str,
+    default_ref: str,
+    required_rule_types: frozenset[str],
+    forbidden_rule_types: frozenset[str] = frozenset(),
+) -> bool:
+    value = require_object(ruleset, "repository ruleset")
+    if not active_ruleset_applies_to_ref(
+        value,
+        target=target,
+        ref=ref,
+        default_ref=default_ref,
+    ) or not ruleset_has_no_bypass_actors(value):
+        return False
+    types = rule_types(value.get("rules"))
+    if types is None or not required_rule_types <= types:
+        return False
+    return not types.intersection(forbidden_rule_types)
+
+
 def any_ruleset_protects(
     rulesets: object,
     *,
@@ -140,6 +187,7 @@ def any_ruleset_protects(
     ref: str,
     default_ref: str,
     required_rule_types: frozenset[str],
+    forbidden_rule_types: frozenset[str] = frozenset(),
 ) -> bool:
     if not isinstance(rulesets, list):
         raise AuditError("repository rulesets response must be a JSON array")
@@ -150,8 +198,58 @@ def any_ruleset_protects(
             ref=ref,
             default_ref=default_ref,
             required_rule_types=required_rule_types,
+            forbidden_rule_types=forbidden_rule_types,
         )
         for ruleset in rulesets
+    )
+
+
+def active_ruleset_allows_controlled_tag_creation(
+    ruleset: object,
+    *,
+    ref: str,
+    default_ref: str,
+) -> bool:
+    value = require_object(ruleset, "repository ruleset")
+    if not active_ruleset_applies_to_ref(
+        value,
+        target="tag",
+        ref=ref,
+        default_ref=default_ref,
+    ) or not ruleset_has_controlled_creation_bypass(value):
+        return False
+    return rule_types(value.get("rules")) == RELEASE_TAG_CREATION_RULE_TYPES
+
+
+def tag_creation_route_is_controlled(
+    rulesets: object,
+    *,
+    ref: str,
+    default_ref: str,
+) -> bool:
+    if not isinstance(rulesets, list):
+        raise AuditError("repository rulesets response must be a JSON array")
+    matching_creation_rulesets: list[object] = []
+    for ruleset in rulesets:
+        value = require_object(ruleset, "repository ruleset")
+        if not active_ruleset_applies_to_ref(
+            value,
+            target="tag",
+            ref=ref,
+            default_ref=default_ref,
+        ):
+            continue
+        types = rule_types(value.get("rules"))
+        if types is None:
+            return False
+        if "creation" in types:
+            matching_creation_rulesets.append(ruleset)
+    return len(
+        matching_creation_rulesets
+    ) == 1 and active_ruleset_allows_controlled_tag_creation(
+        matching_creation_rulesets[0],
+        ref=ref,
+        default_ref=default_ref,
     )
 
 
@@ -408,24 +506,33 @@ def audit_release_setup(
             "require pull requests for main with a branch protection or active ruleset",
         )
 
-    tag_protected = any_ruleset_protects(
+    release_tag_ref = "refs/tags/v0.0.1"
+    tag_immutable = any_ruleset_protects(
         rulesets,
         target="tag",
-        ref="refs/tags/v0.0.1",
+        ref=release_tag_ref,
         default_ref=default_ref,
-        required_rule_types=RELEASE_TAG_RULE_TYPES,
+        required_rule_types=RELEASE_TAG_IMMUTABILITY_RULE_TYPES,
+        forbidden_rule_types=RELEASE_TAG_CREATION_RULE_TYPES,
     )
-    if tag_protected:
+    tag_creation_controlled = tag_creation_route_is_controlled(
+        rulesets,
+        ref=release_tag_ref,
+        default_ref=default_ref,
+    )
+    if tag_immutable and tag_creation_controlled:
         add(
             "pass",
             "release tags",
-            "an active tag ruleset restricts v* creation, update, and deletion",
+            "a creation-only creator allowlist and a separate no-bypass v* "
+            "update/deletion ruleset keep release tags creatable and immutable",
         )
     else:
         add(
             "error",
             "release tags",
-            "restrict v* creation, update, and deletion with an active tag ruleset",
+            "configure a creation-only v* ruleset with an explicit creator allowlist "
+            "and a separate no-bypass v* update/deletion ruleset",
         )
 
     configured_environments = environments_by_name(environments)
