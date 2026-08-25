@@ -16,6 +16,7 @@
     "test:live-chat:artifact-after-finance-warm": "./run-native-live-chat.sh artifact-after-finance-warm",
     "test:live-chat:artifact-after-finance-no-history": "./run-native-live-chat.sh artifact-after-finance-no-history",
     "test:native": "./run-native-smoke.sh",
+    "test:native:windows": "pwsh -NoProfile -File ./run-native-smoke.ps1",
     "test:native:full": "./run-native-smoke.sh --full",
     "test:persistence": "./run-native-persistence.sh",
     "verify-security": "node verify-security.mjs"

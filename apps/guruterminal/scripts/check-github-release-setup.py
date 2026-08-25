@@ -33,6 +33,7 @@ MAIN_REQUIRED_STATUS_CHECK_CONTEXTS = frozenset(
     (
         "Source and product contracts",
         "Native macOS interaction",
+        "Native Windows interaction",
         "Package smoke (aarch64-apple-darwin)",
         "Package smoke (x86_64-pc-windows-msvc)",
     )

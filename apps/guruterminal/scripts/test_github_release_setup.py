@@ -29,6 +29,7 @@ GITHUB_ACTIONS_INTEGRATION_ID = 15368
 MAIN_REQUIRED_CHECK_CONTEXTS = (
     "Source and product contracts",
     "Native macOS interaction",
+    "Native Windows interaction",
     "Package smoke (aarch64-apple-darwin)",
     "Package smoke (x86_64-pc-windows-msvc)",
 )
