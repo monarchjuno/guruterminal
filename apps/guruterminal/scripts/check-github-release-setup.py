@@ -180,6 +180,14 @@ def environment_requires_independent_reviewer(environment: dict[str, object]) ->
     return False
 
 
+def environment_disallows_administrator_bypass(environment: dict[str, object]) -> bool:
+    """Return whether GitHub explicitly prevents administrators from bypassing it."""
+
+    # Treat a missing or differently typed value as unsafe.  The stable release
+    # gate must not rely on a default that could change or be omitted by an API.
+    return environment.get("can_admins_bypass") is False
+
+
 def immutable_releases_are_enabled(value: object | None) -> bool:
     if value is None:
         return False
@@ -320,6 +328,15 @@ def audit_release_setup(
                 "error",
                 f"environment {name}",
                 "configure a required reviewer and prevent self-review",
+            )
+        elif (
+            name == "stable-release"
+            and not environment_disallows_administrator_bypass(environment)
+        ):
+            add(
+                "error",
+                f"environment {name}",
+                "set can_admins_bypass to false to disallow administrator bypass",
             )
         elif environment_is_protected(environment):
             add("pass", f"environment {name}", "deployment protection is configured")
