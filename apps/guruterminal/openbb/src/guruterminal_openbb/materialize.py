@@ -54,6 +54,13 @@ def materialize(root: Path) -> None:
                         stat.S_IMODE(metadata.st_mode),
                         follow_symlinks=False,
                     )
+                    if not link.is_symlink():
+                        raise SystemExit(
+                            f"OpenBB symlink disappeared before materialization: {link}"
+                        )
+                    # macOS resolves a directory symlink passed as the destination
+                    # to rename(2), so replacing it directly fails with ENOTDIR.
+                    link.unlink()
                 else:
                     raise SystemExit(
                         f"OpenBB symlink target is not a file or directory: {link}"

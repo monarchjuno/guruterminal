@@ -164,6 +164,14 @@ while True:
             elif stat.S_ISDIR(target_metadata.st_mode):
                 shutil.copytree(target, temporary, symlinks=True)
                 os.chmod(temporary, stat.S_IMODE(target_metadata.st_mode), follow_symlinks=False)
+                if not link.is_symlink():
+                    raise SystemExit(
+                        f"finance worker symlink disappeared before materialization: {link}"
+                    )
+                # macOS resolves a directory symlink passed as the destination to
+                # rename(2), so replacing it directly fails with ENOTDIR. Unlink
+                # the validated link before installing its materialized copy.
+                link.unlink()
             else:
                 raise SystemExit(f"finance worker symlink target is not a file or directory: {link}")
             os.replace(temporary, link)
