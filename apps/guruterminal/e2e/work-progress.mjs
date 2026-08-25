@@ -11,12 +11,14 @@ export async function isVisible(element) {
   }
 }
 
-async function revealAndExpand(button) {
+async function revealAndExpand(button, { reveal = false } = {}) {
   if (!(await button.isExisting())) return;
-  try {
-    await button.scrollIntoView();
-  } catch {
-    // Attribute dump still works if the row is already in the DOM.
+  if (reveal) {
+    try {
+      await button.scrollIntoView();
+    } catch {
+      // Attribute dump still works if the row is already in the DOM.
+    }
   }
   if (!(await isVisible(button))) return;
   if ((await button.getAttribute("aria-expanded")) !== "true") {
@@ -24,10 +26,10 @@ async function revealAndExpand(button) {
   }
 }
 
-export async function expandProgress(section) {
-  await revealAndExpand(await section.$("button.chat-progress-toggle"));
+export async function expandProgress(section, { reveal = false } = {}) {
+  await revealAndExpand(await section.$("button.chat-progress-toggle"), { reveal });
   for (const group of await section.$$("button.chat-progress-group-toggle")) {
-    await revealAndExpand(group);
+    await revealAndExpand(group, { reveal });
   }
 }
 
@@ -70,12 +72,14 @@ export async function collectWorkProgress(
   const progress = [];
   for (const section of sections) {
     if (requireVisible && !(await isVisible(section))) continue;
-    try {
-      await section.scrollIntoView();
-    } catch {
-      // Off-screen progress still has attributes once expanded.
+    if (requireVisible) {
+      try {
+        await section.scrollIntoView();
+      } catch {
+        // Off-screen progress still has attributes once expanded.
+      }
     }
-    await expandProgress(section);
+    await expandProgress(section, { reveal: requireVisible });
     const heading = await section.$(".chat-progress-heading");
     progress.push({
       heading: (await heading.isExisting())
