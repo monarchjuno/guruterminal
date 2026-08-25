@@ -24,6 +24,37 @@ REQUIRED_SECRETS = {
     "GURUTERMINAL_UPDATER_PUBLIC_KEY",
     "GURUTERMINAL_WINDOWS_CERTIFICATE",
 }
+GITHUB_ACTIONS_INTEGRATION_ID = 15368
+MAIN_REQUIRED_CHECK_CONTEXTS = (
+    "Source and product contracts",
+    "Native macOS interaction",
+    "Package smoke (aarch64-apple-darwin)",
+    "Package smoke (x86_64-pc-windows-msvc)",
+)
+
+
+def required_ci_rule() -> dict[str, object]:
+    return {
+        "type": "required_status_checks",
+        "parameters": {
+            "do_not_enforce_on_create": False,
+            "strict_required_status_checks_policy": True,
+            "required_status_checks": [
+                {"context": context, "integration_id": GITHUB_ACTIONS_INTEGRATION_ID}
+                for context in MAIN_REQUIRED_CHECK_CONTEXTS
+            ],
+        },
+    }
+
+
+def legacy_required_ci_checks() -> dict[str, object]:
+    return {
+        "strict": True,
+        "checks": [
+            {"context": context, "app_id": GITHUB_ACTIONS_INTEGRATION_ID}
+            for context in MAIN_REQUIRED_CHECK_CONTEXTS
+        ],
+    }
 
 
 def configured_rulesets() -> list[dict[str, object]]:
@@ -33,7 +64,11 @@ def configured_rulesets() -> list[dict[str, object]]:
             "enforcement": "active",
             "bypass_actors": [],
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
-            "rules": [{"type": "pull_request"}],
+            "rules": [
+                {"type": "pull_request"},
+                required_ci_rule(),
+                {"type": "non_fast_forward"},
+            ],
         },
         {
             "target": "tag",
@@ -339,7 +374,8 @@ class GitHubReleaseSetupTest(unittest.TestCase):
         findings = self.audit(
             rulesets=rulesets,
             main_legacy_protection={
-                "required_pull_request_reviews": {"required_approving_review_count": 1}
+                "required_pull_request_reviews": {"required_approving_review_count": 1},
+                "required_status_checks": legacy_required_ci_checks(),
             },
         )
         self.assertNotIn("error", [finding.level for finding in findings])
@@ -350,6 +386,57 @@ class GitHubReleaseSetupTest(unittest.TestCase):
         )
         errors = {finding.subject for finding in findings if finding.level == "error"}
         self.assertIn("main protection", errors)
+
+    def test_main_ruleset_requires_strict_github_actions_ci_checks(self) -> None:
+        cases: tuple[str, ...] = (
+            "missing status rule",
+            "loose status rule",
+            "wrong status source",
+            "missing required context",
+            "missing force-push protection",
+        )
+        for label in cases:
+            with self.subTest(label=label):
+                rulesets = configured_rulesets()
+                main_rule = rulesets[0]
+                rules = main_rule["rules"]
+                assert isinstance(rules, list)
+                status_rule = next(
+                    rule
+                    for rule in rules
+                    if isinstance(rule, dict)
+                    and rule.get("type") == "required_status_checks"
+                )
+                assert isinstance(status_rule, dict)
+                parameters = status_rule["parameters"]
+                assert isinstance(parameters, dict)
+                checks = parameters["required_status_checks"]
+                assert isinstance(checks, list)
+                if label == "missing status rule":
+                    main_rule["rules"] = [
+                        rule for rule in rules if rule is not status_rule
+                    ]
+                elif label == "loose status rule":
+                    parameters["strict_required_status_checks_policy"] = False
+                elif label == "wrong status source":
+                    checks[0] = {
+                        "context": MAIN_REQUIRED_CHECK_CONTEXTS[0],
+                        "integration_id": 1,
+                    }
+                elif label == "missing required context":
+                    parameters["required_status_checks"] = checks[1:]
+                else:
+                    main_rule["rules"] = [
+                        rule
+                        for rule in rules
+                        if not isinstance(rule, dict)
+                        or rule.get("type") != "non_fast_forward"
+                    ]
+                findings = self.audit(rulesets=rulesets)
+                errors = {
+                    finding.subject for finding in findings if finding.level == "error"
+                }
+                self.assertIn("main protection", errors)
 
     def test_tag_triggered_environments_require_v_tag_policy_even_with_reviewers(
         self,

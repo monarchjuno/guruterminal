@@ -28,7 +28,18 @@ REQUIRED_ENVIRONMENTS = ("release", "release-qualification", "stable-release")
 TAG_TRIGGERED_ENVIRONMENTS = frozenset(REQUIRED_ENVIRONMENTS)
 REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
-MAIN_BRANCH_RULE_TYPES = frozenset(("pull_request",))
+GITHUB_ACTIONS_INTEGRATION_ID = 15368
+MAIN_REQUIRED_STATUS_CHECK_CONTEXTS = frozenset(
+    (
+        "Source and product contracts",
+        "Native macOS interaction",
+        "Package smoke (aarch64-apple-darwin)",
+        "Package smoke (x86_64-pc-windows-msvc)",
+    )
+)
+MAIN_BRANCH_RULE_TYPES = frozenset(
+    ("pull_request", "required_status_checks", "non_fast_forward")
+)
 RELEASE_TAG_IMMUTABILITY_RULE_TYPES = frozenset(("update", "deletion"))
 RELEASE_TAG_CREATION_RULE_TYPES = frozenset(("creation",))
 RELEASE_TAG_CREATOR_ACTOR_TYPES = frozenset(
@@ -90,6 +101,68 @@ def rule_types(value: object) -> set[str] | None:
             return None
         types.add(rule_type)
     return types
+
+
+def status_checks_are_strict_and_github_actions_owned(
+    parameters: object,
+) -> bool:
+    if not isinstance(parameters, dict):
+        return False
+    if (
+        parameters.get("do_not_enforce_on_create") is not False
+        or parameters.get("strict_required_status_checks_policy") is not True
+    ):
+        return False
+    checks = parameters.get("required_status_checks")
+    if not isinstance(checks, list):
+        return False
+    contexts: set[str] = set()
+    for check in checks:
+        if not isinstance(check, dict):
+            return False
+        context = check.get("context")
+        if not isinstance(context, str) or not context:
+            return False
+        if check.get("integration_id") != GITHUB_ACTIONS_INTEGRATION_ID:
+            return False
+        contexts.add(context)
+    return MAIN_REQUIRED_STATUS_CHECK_CONTEXTS <= contexts
+
+
+def ruleset_requires_strict_github_actions_ci(ruleset: dict[str, object]) -> bool:
+    rules = ruleset.get("rules")
+    if not isinstance(rules, list):
+        return False
+    status_rules = [
+        rule
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("type") == "required_status_checks"
+    ]
+    return len(status_rules) == 1 and status_checks_are_strict_and_github_actions_owned(
+        status_rules[0].get("parameters")
+    )
+
+
+def legacy_main_requires_strict_github_actions_ci(
+    protection: dict[str, object],
+) -> bool:
+    status_checks = protection.get("required_status_checks")
+    if not isinstance(status_checks, dict) or status_checks.get("strict") is not True:
+        return False
+    checks = status_checks.get("checks")
+    if not isinstance(checks, list):
+        return False
+    contexts: set[str] = set()
+    for check in checks:
+        if not isinstance(check, dict):
+            return False
+        context = check.get("context")
+        if not isinstance(context, str) or not context:
+            return False
+        if check.get("app_id") != GITHUB_ACTIONS_INTEGRATION_ID:
+            return False
+        contexts.add(context)
+    return MAIN_REQUIRED_STATUS_CHECK_CONTEXTS <= contexts
 
 
 def ruleset_has_no_bypass_actors(ruleset: dict[str, object]) -> bool:
@@ -202,6 +275,29 @@ def any_ruleset_protects(
         )
         for ruleset in rulesets
     )
+
+
+def any_ruleset_protects_main_with_ci(
+    rulesets: object,
+    *,
+    ref: str,
+    default_ref: str,
+) -> bool:
+    if not isinstance(rulesets, list):
+        raise AuditError("repository rulesets response must be a JSON array")
+    for ruleset in rulesets:
+        if not active_ruleset_protects(
+            ruleset,
+            target="branch",
+            ref=ref,
+            default_ref=default_ref,
+            required_rule_types=MAIN_BRANCH_RULE_TYPES,
+        ):
+            continue
+        value = require_object(ruleset, "repository ruleset")
+        if ruleset_requires_strict_github_actions_ci(value):
+            return True
+    return False
 
 
 def active_ruleset_allows_controlled_tag_creation(
@@ -380,7 +476,9 @@ def legacy_main_has_pull_request_protection(value: object | None) -> bool:
     if value is None:
         return False
     protection = require_object(value, "main branch protection response")
-    return isinstance(protection.get("required_pull_request_reviews"), dict)
+    return isinstance(
+        protection.get("required_pull_request_reviews"), dict
+    ) and legacy_main_requires_strict_github_actions_ci(protection)
 
 
 def secret_names(value: object, *, response_label: str, item_label: str) -> set[str]:
@@ -486,24 +584,23 @@ def audit_release_setup(
 
     main_protected = legacy_main_has_pull_request_protection(
         main_legacy_protection
-    ) or any_ruleset_protects(
+    ) or any_ruleset_protects_main_with_ci(
         rulesets,
-        target="branch",
         ref=default_ref,
         default_ref=default_ref,
-        required_rule_types=MAIN_BRANCH_RULE_TYPES,
     )
     if main_protected:
         add(
             "pass",
             "main protection",
-            "a pull-request branch protection or active ruleset applies",
+            "a no-bypass pull-request rule and strict GitHub Actions CI checks apply",
         )
     else:
         add(
             "error",
             "main protection",
-            "require pull requests for main with a branch protection or active ruleset",
+            "require pull requests and strict GitHub Actions CI checks for main "
+            "with a branch protection or active ruleset",
         )
 
     release_tag_ref = "refs/tags/v0.0.1"
