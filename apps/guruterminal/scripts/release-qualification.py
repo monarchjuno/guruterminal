@@ -81,6 +81,45 @@ def validate_release_sequence(
         )
 
 
+def validate_rc_release_sequence(candidate_tag: str, published_tags: list[str]) -> None:
+    """Keep a prerelease line contiguous for the fixed next-RC update feed.
+
+    An installed ``vX.Y.Z-rc.N`` checks only ``rc.(N + 1)`` and the stable
+    feed.  Publishing a later RC while skipping a number would strand that
+    installed client, so release creation must preserve a complete sequence.
+    """
+
+    candidate = RC_TAG.fullmatch(candidate_tag)
+    if candidate is None:
+        raise RuntimeError(
+            "release candidate must be a canonical vMAJOR.MINOR.PATCH-rc.N tag"
+        )
+    base = candidate.groups()[:3]
+    candidate_sequence = int(candidate.group(4))
+    sequences: set[int] = set()
+    for tag in published_tags:
+        stable = STABLE_TAG.fullmatch(tag)
+        if stable is not None and stable.groups() == base:
+            raise RuntimeError(
+                "cannot publish a release candidate after its matching stable release"
+            )
+        published = RC_TAG.fullmatch(tag)
+        if published is not None and published.groups()[:3] == base:
+            sequences.add(int(published.group(4)))
+
+    ordered_sequences = sorted(sequences)
+    expected_published = list(range(1, len(ordered_sequences) + 1))
+    if ordered_sequences != expected_published:
+        raise RuntimeError(
+            "published release candidates for this version must be contiguous from rc.1"
+        )
+    expected_candidate = len(ordered_sequences) + 1
+    if candidate_sequence != expected_candidate:
+        raise RuntimeError(
+            f"release candidate must be the next contiguous tag: expected rc.{expected_candidate}"
+        )
+
+
 def evidence_url(value: str, label: str) -> str:
     parsed = urlparse(value)
     if (
@@ -345,6 +384,16 @@ def validate_sequence(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def validate_rc_sequence(arguments: argparse.Namespace) -> int:
+    if arguments.published_tags.is_symlink() or not arguments.published_tags.is_file():
+        raise RuntimeError("published release tags must be a regular file")
+    validate_rc_release_sequence(
+        arguments.candidate_tag,
+        arguments.published_tags.read_text(encoding="utf-8").splitlines(),
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -385,6 +434,11 @@ def main() -> int:
     sequence.add_argument("--previous-tag", required=True)
     sequence.add_argument("--latest-stable-tag", required=True)
     sequence.set_defaults(handler=validate_sequence)
+
+    rc_sequence = subparsers.add_parser("rc-sequence")
+    rc_sequence.add_argument("--candidate-tag", required=True)
+    rc_sequence.add_argument("--published-tags", required=True, type=Path)
+    rc_sequence.set_defaults(handler=validate_rc_sequence)
 
     arguments = parser.parse_args()
     return arguments.handler(arguments)

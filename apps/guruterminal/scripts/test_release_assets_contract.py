@@ -494,6 +494,53 @@ class ReleaseAssetsContractTest(unittest.TestCase):
         self.assertNotEqual(non_monotonic.returncode, 0)
         self.assertIn("must be strictly newer", non_monotonic.stderr)
 
+    def test_release_candidates_must_form_a_contiguous_update_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = Path(temporary_directory) / "published-tags.txt"
+
+            def validate(
+                candidate_tag: str, tags: list[str]
+            ) -> subprocess.CompletedProcess[str]:
+                published.write_text("\n".join(tags) + "\n", encoding="utf-8")
+                return self.run_script(
+                    "release-qualification.py",
+                    "rc-sequence",
+                    "--candidate-tag",
+                    candidate_tag,
+                    "--published-tags",
+                    str(published),
+                )
+
+            self.assertEqual(validate("v1.2.3-rc.1", []).returncode, 0)
+            self.assertEqual(
+                validate("v1.2.3-rc.2", ["v1.2.3-rc.1", "v9.9.9-rc.7"]).returncode,
+                0,
+            )
+
+            skipped = validate("v1.2.3-rc.3", ["v1.2.3-rc.1"])
+            self.assertNotEqual(skipped.returncode, 0)
+            self.assertIn("expected rc.2", skipped.stderr)
+
+            broken_history = validate("v1.2.3-rc.4", ["v1.2.3-rc.1", "v1.2.3-rc.3"])
+            self.assertNotEqual(broken_history.returncode, 0)
+            self.assertIn("must be contiguous", broken_history.stderr)
+
+            after_stable = validate("v1.2.3-rc.1", ["v1.2.3"])
+            self.assertNotEqual(after_stable.returncode, 0)
+            self.assertIn("after its matching stable", after_stable.stderr)
+
+            malformed = validate("v1.2.3-rc.0", [])
+            self.assertNotEqual(malformed.returncode, 0)
+            self.assertIn("canonical", malformed.stderr)
+
+    def test_release_workflow_enforces_contiguous_rc_candidates(self) -> None:
+        workflow = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Require contiguous release candidates", workflow)
+        self.assertIn("release-qualification.py rc-sequence", workflow)
+        self.assertIn("published-release-tags.txt", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
