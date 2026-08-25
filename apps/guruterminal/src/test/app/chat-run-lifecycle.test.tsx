@@ -27,9 +27,9 @@ describe("Guru Terminal · Chat run lifecycle", () => {
     await user.click(await screen.findByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
-    expect(
-      await screen.findByText(/I reviewed “Strict lifecycle check”/),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByText(/I reviewed “Strict lifecycle check”/)).toBeVisible(),
+    );
   });
 
   it("recovers multiple native Chat targets in the sidebar and Stops only the visible exact run", async () => {
