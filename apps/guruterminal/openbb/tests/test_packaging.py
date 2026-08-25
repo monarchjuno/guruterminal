@@ -36,6 +36,20 @@ def test_materialize_replaces_internal_symlink(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows staging has no bundle symlinks")
+def test_materialize_replaces_internal_directory_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "framework-resources"
+    target.mkdir()
+    (target / "library").write_bytes(b"directory library")
+    link = tmp_path / "Resources"
+    link.symlink_to(target.name, target_is_directory=True)
+
+    materialize(tmp_path)
+
+    assert not link.is_symlink()
+    assert (link / "library").read_bytes() == b"directory library"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows staging has no bundle symlinks")
 def test_materialize_rejects_escaping_symlink(tmp_path: Path) -> None:
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.write_bytes(b"outside")
