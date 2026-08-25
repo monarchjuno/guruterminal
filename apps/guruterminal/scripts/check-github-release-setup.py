@@ -754,12 +754,48 @@ def gh_api(gh: str, endpoint: str, *, allow_not_found: bool = False) -> object |
         raise AuditError(f"GitHub API response for {endpoint} was not JSON") from error
 
 
+def load_ruleset_details(gh: str, repository: str, summaries: object) -> list[object]:
+    """Load each ruleset because the list API deliberately returns summaries only."""
+
+    if not isinstance(summaries, list):
+        raise AuditError("repository rulesets response must be a JSON array")
+    seen_ids: set[int] = set()
+    ruleset_ids: list[int] = []
+    for summary in summaries:
+        value = require_object(summary, "repository ruleset summary")
+        ruleset_id = value.get("id")
+        if (
+            not isinstance(ruleset_id, int)
+            or isinstance(ruleset_id, bool)
+            or ruleset_id < 1
+            or ruleset_id in seen_ids
+        ):
+            raise AuditError(
+                "repository ruleset summary id must be unique and positive"
+            )
+        seen_ids.add(ruleset_id)
+        ruleset_ids.append(ruleset_id)
+
+    details: list[object] = []
+    for ruleset_id in ruleset_ids:
+        detail = gh_api(gh, f"/repos/{repository}/rulesets/{ruleset_id}")
+        detailed_value = require_object(detail, "repository ruleset detail")
+        if detailed_value.get("id") != ruleset_id:
+            raise AuditError("repository ruleset detail did not match its summary id")
+        details.append(detail)
+    return details
+
+
 def remote_audit(repository: str, workflow: Path, gh: str) -> list[Finding]:
     if REPOSITORY_PATTERN.fullmatch(repository) is None:
         raise AuditError("--repository must be an owner/name pair")
     required_secrets = required_release_secret_names(workflow)
     repository_data = gh_api(gh, f"/repos/{repository}")
-    rulesets = gh_api(gh, f"/repos/{repository}/rulesets?per_page=100")
+    rulesets = load_ruleset_details(
+        gh,
+        repository,
+        gh_api(gh, f"/repos/{repository}/rulesets?per_page=100&includes_parents=false"),
+    )
     main_protection = gh_api(
         gh,
         f"/repos/{repository}/branches/{EXPECTED_DEFAULT_BRANCH}/protection",

@@ -14,6 +14,7 @@ SCRIPTS = Path(__file__).resolve().parent
 AUDIT = runpy.run_path(str(SCRIPTS / "check-github-release-setup.py"))
 AuditError = AUDIT["AuditError"]
 audit_release_setup = AUDIT["audit_release_setup"]
+load_ruleset_details = AUDIT["load_ruleset_details"]
 remote_audit = AUDIT["remote_audit"]
 repository_secret_names = AUDIT["repository_secret_names"]
 required_release_secret_names = AUDIT["required_release_secret_names"]
@@ -642,6 +643,13 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                 {"total_count": 101, "secrets": [{"name": "GURUTERMINAL_ONE"}]}
             )
 
+    def test_ruleset_detail_loader_rejects_ambiguous_summaries(self) -> None:
+        with self.assertRaises(AuditError):
+            load_ruleset_details("read-only-gh", REPOSITORY, [{"id": 1}, {"id": 1}])
+
+        with self.assertRaises(AuditError):
+            load_ruleset_details("read-only-gh", REPOSITORY, [{"id": True}])
+
     def test_workflow_secret_references_are_derived_without_reading_values(
         self,
     ) -> None:
@@ -662,6 +670,10 @@ class GitHubReleaseSetupTest(unittest.TestCase):
     ) -> None:
         environments = configured_environments()
         requests: list[str] = []
+        rulesets = [
+            {"id": index + 1, **ruleset}
+            for index, ruleset in enumerate(configured_rulesets())
+        ]
         endpoints: dict[str, object | None] = {
             f"/repos/{REPOSITORY}": {
                 "full_name": REPOSITORY,
@@ -669,7 +681,13 @@ class GitHubReleaseSetupTest(unittest.TestCase):
                 "private": False,
                 "default_branch": "main",
             },
-            f"/repos/{REPOSITORY}/rulesets?per_page=100": configured_rulesets(),
+            f"/repos/{REPOSITORY}/rulesets?per_page=100&includes_parents=false": [
+                {"id": index + 1} for index in range(len(rulesets))
+            ],
+            **{
+                f"/repos/{REPOSITORY}/rulesets/{index + 1}": ruleset
+                for index, ruleset in enumerate(rulesets)
+            },
             f"/repos/{REPOSITORY}/branches/main/protection": None,
             f"/repos/{REPOSITORY}/immutable-releases": {
                 "enabled": True,
@@ -732,6 +750,10 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             set(requests)
             & {
                 f"/repos/{REPOSITORY}/actions/secrets?per_page=100",
+                f"/repos/{REPOSITORY}/rulesets?per_page=100&includes_parents=false",
+                f"/repos/{REPOSITORY}/rulesets/1",
+                f"/repos/{REPOSITORY}/rulesets/2",
+                f"/repos/{REPOSITORY}/rulesets/3",
                 f"/repos/{REPOSITORY}/environments/release/secrets?per_page=100",
                 f"/repos/{REPOSITORY}/environments/release-qualification/secrets?per_page=100",
                 f"/repos/{REPOSITORY}/environments/stable-release/secrets?per_page=100",
@@ -741,6 +763,10 @@ class GitHubReleaseSetupTest(unittest.TestCase):
             },
             {
                 f"/repos/{REPOSITORY}/actions/secrets?per_page=100",
+                f"/repos/{REPOSITORY}/rulesets?per_page=100&includes_parents=false",
+                f"/repos/{REPOSITORY}/rulesets/1",
+                f"/repos/{REPOSITORY}/rulesets/2",
+                f"/repos/{REPOSITORY}/rulesets/3",
                 f"/repos/{REPOSITORY}/environments/release/secrets?per_page=100",
                 f"/repos/{REPOSITORY}/environments/release-qualification/secrets?per_page=100",
                 f"/repos/{REPOSITORY}/environments/stable-release/secrets?per_page=100",
