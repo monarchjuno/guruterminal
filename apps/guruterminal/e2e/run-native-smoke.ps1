@@ -18,8 +18,12 @@ $TauriCli = Join-Path $AppRoot "node_modules/@tauri-apps/cli/tauri.js"
 $TauriConfig = Join-Path $AppRoot "src-tauri/tauri.e2e.conf.json"
 $StateRoot = $null
 $TauriProcess = $null
+$TauriOutputCapture = $null
+$StartupFailure = $false
 $HttpHandler = $null
 $HttpClient = $null
+$LauncherLogTailLineCount = 80
+$LauncherLogDrainTimeoutMilliseconds = 5000
 
 function Require-Application([string]$Name) {
     $command = @(
@@ -161,6 +165,159 @@ function Test-WebDriverReady([int]$Port) {
     }
 }
 
+function Dispose-Quietly([System.IDisposable]$Resource) {
+    if ($null -eq $Resource) {
+        return
+    }
+    try {
+        $Resource.Dispose()
+    }
+    catch {
+    }
+}
+
+function Start-ProcessOutputCapture(
+    [System.Diagnostics.Process]$Process,
+    [string]$StandardOutputPath,
+    [string]$StandardErrorPath
+) {
+    $standardOutputStream = $null
+    $standardErrorStream = $null
+    $standardOutputSource = $null
+    $standardErrorSource = $null
+
+    try {
+        $standardOutputStream = [System.IO.FileStream]::new(
+            $StandardOutputPath,
+            [System.IO.FileMode]::Create,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::Read
+        )
+        $standardErrorStream = [System.IO.FileStream]::new(
+            $StandardErrorPath,
+            [System.IO.FileMode]::Create,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::Read
+        )
+        $standardOutputSource = $Process.StandardOutput.BaseStream
+        $standardErrorSource = $Process.StandardError.BaseStream
+
+        # Pump both redirected streams concurrently so either pipe can fill
+        # without blocking the launcher. CopyToAsync has a fixed-size buffer.
+        $standardOutputTask = $standardOutputSource.CopyToAsync(
+            $standardOutputStream,
+            81920
+        )
+        $standardErrorTask = $standardErrorSource.CopyToAsync(
+            $standardErrorStream,
+            81920
+        )
+
+        return [pscustomobject]@{
+            Process = $Process
+            StandardOutputPath = $StandardOutputPath
+            StandardErrorPath = $StandardErrorPath
+            StandardOutputSource = $standardOutputSource
+            StandardErrorSource = $standardErrorSource
+            StandardOutputStream = $standardOutputStream
+            StandardErrorStream = $standardErrorStream
+            StandardOutputTask = $standardOutputTask
+            StandardErrorTask = $standardErrorTask
+            Completed = $false
+        }
+    }
+    catch {
+        Dispose-Quietly $standardOutputSource
+        Dispose-Quietly $standardErrorSource
+        Dispose-Quietly $standardOutputStream
+        Dispose-Quietly $standardErrorStream
+        throw
+    }
+}
+
+function Complete-ProcessOutputCapture([object]$Capture) {
+    if ($null -eq $Capture -or $Capture.Completed) {
+        return
+    }
+
+    try {
+        if ($Capture.Process.HasExited) {
+            $tasks = [System.Threading.Tasks.Task[]]@(
+                $Capture.StandardOutputTask,
+                $Capture.StandardErrorTask
+            )
+            $drainTask = [System.Threading.Tasks.Task]::WhenAll($tasks)
+            $drained = $false
+            try {
+                $drained = $drainTask.Wait($LauncherLogDrainTimeoutMilliseconds)
+            }
+            catch {
+                # A failed copy has already completed; retain its partial log.
+                $drained = $true
+            }
+            if (-not $drained) {
+                Write-Warning (
+                    "Guru Terminal launcher output did not close within " +
+                    "$LauncherLogDrainTimeoutMilliseconds milliseconds; printing the captured tail."
+                )
+            }
+        }
+    }
+    finally {
+        Dispose-Quietly $Capture.StandardOutputSource
+        Dispose-Quietly $Capture.StandardErrorSource
+        try {
+            $Capture.StandardOutputStream.Flush()
+        }
+        catch {
+        }
+        try {
+            $Capture.StandardErrorStream.Flush()
+        }
+        catch {
+        }
+        Dispose-Quietly $Capture.StandardOutputStream
+        Dispose-Quietly $Capture.StandardErrorStream
+        $Capture.Completed = $true
+    }
+}
+
+function Write-LauncherLogTail(
+    [string]$Label,
+    [string]$Path,
+    [int]$LineCount
+) {
+    Write-Host "Guru Terminal launcher $Label log tail (up to $LineCount lines): $Path"
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Write-Host "(log was not created)"
+        return
+    }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $Path -Tail $LineCount -ErrorAction Stop)
+    }
+    catch {
+        Write-Warning "Could not read Guru Terminal launcher $Label log."
+        return
+    }
+
+    if ($lines.Count -eq 0) {
+        Write-Host "(no output captured)"
+        return
+    }
+    foreach ($line in $lines) {
+        Write-Host $line
+    }
+}
+
+function Write-LauncherLogTails([object]$Capture) {
+    if ($null -eq $Capture) {
+        return
+    }
+    Write-LauncherLogTail "standard output" $Capture.StandardOutputPath $LauncherLogTailLineCount
+    Write-LauncherLogTail "standard error" $Capture.StandardErrorPath $LauncherLogTailLineCount
+}
+
 function Wait-ForOwnedWebDriver(
     [int]$Port,
     [int]$RootProcessId,
@@ -169,6 +326,7 @@ function Wait-ForOwnedWebDriver(
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (-not (Test-ProcessRunning $RootProcessId)) {
+            $script:StartupFailure = $true
             throw "Guru Terminal launcher exited before WebDriver became ready."
         }
         if (
@@ -181,6 +339,7 @@ function Wait-ForOwnedWebDriver(
     }
 
     $listeners = (Get-ListeningProcessIds $Port) -join ", "
+    $script:StartupFailure = $true
     throw (
         "Guru Terminal WebDriver did not become ready and owned within " +
         "$TimeoutMilliseconds milliseconds (listening PIDs: $listeners)."
@@ -188,7 +347,7 @@ function Wait-ForOwnedWebDriver(
 }
 
 function Stop-StartedProcessTree([System.Diagnostics.Process]$RootProcess) {
-    if ($null -eq $RootProcess -or $RootProcess.HasExited) {
+    if ($null -eq $RootProcess) {
         return
     }
 
@@ -227,6 +386,10 @@ function New-CleanTauriProcessInfo(
     $startInfo.WorkingDirectory = $AppRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
 
     foreach ($argument in @(
         $TauriCli,
@@ -325,6 +488,11 @@ try {
         throw "Guru Terminal E2E launcher did not start."
     }
 
+    $TauriOutputCapture = Start-ProcessOutputCapture `
+        $TauriProcess `
+        (Join-Path $ArtifactDir "native-windows-launcher.stdout.log") `
+        (Join-Path $ArtifactDir "native-windows-launcher.stderr.log")
+
     Wait-ForOwnedWebDriver $WebDriverPort $TauriProcess.Id $StartupTimeout
     & $NodeBinary $WaitSession `
         --write-session $SessionInfo `
@@ -344,6 +512,12 @@ try {
 finally {
     if ($null -ne $TauriProcess) {
         Stop-StartedProcessTree $TauriProcess
+    }
+    if ($null -ne $TauriOutputCapture) {
+        Complete-ProcessOutputCapture $TauriOutputCapture
+        if ($StartupFailure) {
+            Write-LauncherLogTails $TauriOutputCapture
+        }
     }
     if ($null -ne $HttpClient) {
         $HttpClient.Dispose()
