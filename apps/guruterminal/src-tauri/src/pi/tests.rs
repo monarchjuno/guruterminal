@@ -33,6 +33,7 @@ fn launch_is_offline_and_exposes_only_explicit_extension_tools() {
         "--extension",
         "--no-skills",
         "--no-context-files",
+        "--approve",
         "--offline",
         "--thinking",
     ] {
@@ -50,10 +51,50 @@ fn launch_is_offline_and_exposes_only_explicit_extension_tools() {
         .position(|arg| arg == "--thinking")
         .expect("thinking flag");
     assert_eq!(args[thinking_index + 1], "medium");
-    assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
+    let append_prompt_index = args
+        .iter()
+        .position(|arg| arg == "--append-system-prompt")
+        .expect("append prompt suppression flag");
+    assert_eq!(args[append_prompt_index + 1], "");
     assert!(!args
         .iter()
         .any(|arg| Some(arg) == config.host_context.as_ref()));
+}
+
+#[test]
+fn stable_private_project_settings_force_sse_without_overwriting_existing_input() {
+    let temporary = tempfile::tempdir().unwrap();
+    let working_dir = temporary.path().join("pi-runtime");
+    ensure_private_directory(&working_dir).unwrap();
+    let config = PiLaunchConfig {
+        executable: "pi".into(),
+        runtime_dir: "runtime".into(),
+        extension: "extension.mjs".into(),
+        system_prompt: "SYSTEM.md".into(),
+        agent_data_dir: temporary.path().join("agent-data"),
+        working_dir: working_dir.clone(),
+        private_run_dir: temporary.path().join("run"),
+        lease_dir: temporary.path().join("leases"),
+        broker_socket: temporary.path().join("broker.sock"),
+        broker_token: "secret".into(),
+        provider: "openai-codex".into(),
+        model: "gpt-5.6-luna".into(),
+        thinking_level: "max".into(),
+        run_options: std::collections::BTreeMap::new(),
+        provider_credential: None,
+        host_context: Some("{}".into()),
+        skill_files: Vec::new(),
+        session: None,
+    };
+
+    ensure_pi_project_settings(&config).unwrap();
+    let settings_path = working_dir.join(".pi/settings.json");
+    assert_eq!(std::fs::read(&settings_path).unwrap(), PI_PROJECT_SETTINGS);
+    ensure_pi_project_settings(&config).unwrap();
+
+    std::fs::write(&settings_path, b"{}").unwrap();
+    assert!(ensure_pi_project_settings(&config).is_err());
+    assert_eq!(std::fs::read(&settings_path).unwrap(), b"{}");
 }
 
 #[test]

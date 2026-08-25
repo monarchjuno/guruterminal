@@ -546,6 +546,26 @@ pub fn signal_process_group(process_group_id: i32, signal: i32) -> Result<(), Pr
     }
 }
 
+/// The result of a bounded app-owned process-group exit observation.
+///
+/// Only [`ProcessGroupTermination::Confirmed`] establishes that no group
+/// member can still execute or mutate child-owned artifacts. Callers must
+/// treat every other result as unsafe to reuse those artifacts.
+#[cfg(unix)]
+#[derive(Debug)]
+#[must_use = "only Confirmed makes child-owned artifacts safe to reuse"]
+pub(crate) enum ProcessGroupTermination {
+    Confirmed,
+    Unconfirmed,
+}
+
+#[cfg(unix)]
+impl ProcessGroupTermination {
+    pub(crate) const fn is_confirmed(&self) -> bool {
+        matches!(self, Self::Confirmed)
+    }
+}
+
 /// Waits until a group has no live members. Zombies count as exited because
 /// they cannot execute and may await an external init process to reap them.
 #[cfg(unix)]
@@ -555,6 +575,22 @@ pub async fn wait_for_process_group_exit(process_group_id: i32) -> Result<(), Pr
             return Ok(());
         }
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Observes an owned process group for a bounded interval.
+///
+/// A timeout or an inability to prove the group state is deliberately
+/// reported as `Unconfirmed`: callers must not reuse files the group could
+/// still write until a later confirmed observation or next-start recovery.
+#[cfg(unix)]
+pub(crate) async fn confirm_process_group_exit(
+    process_group_id: i32,
+    deadline: Duration,
+) -> ProcessGroupTermination {
+    match tokio::time::timeout(deadline, wait_for_process_group_exit(process_group_id)).await {
+        Ok(Ok(())) => ProcessGroupTermination::Confirmed,
+        Ok(Err(_)) | Err(_) => ProcessGroupTermination::Unconfirmed,
     }
 }
 
@@ -571,14 +607,10 @@ pub fn terminate_and_reap_process_group(process_group_id: i32, lease: ChildProce
         return;
     };
     runtime.spawn(async move {
-        if matches!(
-            tokio::time::timeout(
-                Duration::from_secs(2),
-                wait_for_process_group_exit(process_group_id),
-            )
-            .await,
-            Ok(Ok(()))
-        ) {
+        if confirm_process_group_exit(process_group_id, Duration::from_secs(2))
+            .await
+            .is_confirmed()
+        {
             let _ = lease.complete();
         }
     });

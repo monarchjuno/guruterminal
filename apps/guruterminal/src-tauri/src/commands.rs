@@ -42,7 +42,7 @@ use std::{
 use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{SecondsFormat, TimeZone, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
 use uuid::Uuid;
@@ -320,28 +320,165 @@ pub(crate) fn materialize_user_skill_snapshots(
     Ok(paths)
 }
 
+/// Non-secret authority snapshot for retaining Pi JSONL tool-result context.
+///
+/// Configuration and credential values are deliberately excluded. Their
+/// opaque, independently-rotated revisions bind cache reuse instead.
+#[derive(Clone, Debug)]
+pub(crate) struct ChatConnectorAuthority {
+    pub(crate) capability_ids: Vec<String>,
+    pub(crate) sha256: String,
+    pub(crate) cacheable: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct ChatConnectorAuthoritySeal {
+    version: &'static str,
+    bindings: Vec<ChatConnectorBindingSeal>,
+    connectors: Vec<ChatConnectorSeal>,
+}
+
+#[derive(Clone, Serialize)]
+struct ChatConnectorBindingSeal {
+    entry_id: String,
+    enabled: bool,
+    execute: bool,
+    updated_at_ms: i64,
+}
+
+#[derive(Clone, Serialize)]
+struct ChatConnectorSeal {
+    entry_id: String,
+    config_revision: crate::marketplace::connector_config::ConnectorConfigRevision,
+    active_credential_revision: Option<String>,
+}
+
+const CHAT_CONNECTOR_AUTHORITY_SEAL_VERSION: &str = "chat-connector-authority/v1";
+
+fn canonicalize_chat_connector_authority_seal(seal: &mut ChatConnectorAuthoritySeal) {
+    seal.bindings
+        .sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
+    seal.connectors
+        .sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
+}
+
+fn chat_connector_authority_sha256(
+    seal: &ChatConnectorAuthoritySeal,
+) -> Result<String, CommandError> {
+    let serialized = serde_json::to_vec(seal).map_err(map_internal)?;
+    Ok(crate::hashing::sha256(&serialized))
+}
+
+fn binding_grants_execute(binding: &GuruCapabilityBinding) -> bool {
+    binding
+        .granted_permissions
+        .iter()
+        .any(|permission| permission == "execute")
+}
+
+fn enabled_execute_capability_ids_from_bindings(
+    state: &AppState,
+    bindings: &[GuruCapabilityBinding],
+) -> Result<Vec<String>, CommandError> {
+    let mut ready = BTreeSet::new();
+    for binding in bindings {
+        if binding.enabled
+            && binding_grants_execute(binding)
+            && crate::marketplace::execute_binding_ready(binding, state)?
+        {
+            ready.insert(binding.entry_id.clone());
+        }
+    }
+    Ok(ready.into_iter().collect())
+}
+
+#[cfg(test)]
 pub(crate) fn enabled_execute_capability_ids(
     state: &AppState,
     guru_id: &str,
 ) -> Result<Vec<String>, CommandError> {
     crate::marketplace::with_connector_lifecycle(|| {
-        let mut ready = BTreeSet::new();
-        for binding in state
+        let bindings = state
             .store
             .list_guru_capabilities(guru_id)
-            .map_err(map_store)?
-        {
-            if binding.enabled
-                && binding
-                    .granted_permissions
-                    .iter()
-                    .any(|permission| permission == "execute")
-                && crate::marketplace::execute_binding_ready(&binding, state)?
-            {
-                ready.insert(binding.entry_id);
-            }
-        }
-        Ok(ready.into_iter().collect())
+            .map_err(map_store)?;
+        enabled_execute_capability_ids_from_bindings(state, &bindings)
+    })
+}
+
+/// Captures every connector authority which may influence a Pi session. The
+/// whole catalog is included: a disabled connector's global config can be a
+/// runtime dependency of another enabled connector.
+pub(crate) fn capture_chat_connector_authority(
+    state: &AppState,
+    guru_id: &str,
+) -> Result<ChatConnectorAuthority, CommandError> {
+    crate::marketplace::with_connector_lifecycle(|| {
+        let bindings = state
+            .store
+            .list_guru_capabilities(guru_id)
+            .map_err(map_store)?;
+        let capability_ids = enabled_execute_capability_ids_from_bindings(state, &bindings)?;
+        let binding_seals = bindings
+            .into_iter()
+            .map(|binding| {
+                let execute = binding_grants_execute(&binding);
+                ChatConnectorBindingSeal {
+                    entry_id: binding.entry_id,
+                    enabled: binding.enabled,
+                    execute,
+                    updated_at_ms: binding.updated_at_ms,
+                }
+            })
+            .collect::<Vec<_>>();
+        let catalog = crate::marketplace::bundled_catalog()?;
+        let mut cacheable = true;
+        let connector_seals = catalog
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let config_revision =
+                    match crate::marketplace::connector_config::connector_config_revision(
+                        state, &entry.id,
+                    ) {
+                        Ok(revision) => revision,
+                        // A malformed or unreadable dormant connector must never
+                        // keep an old Pi cache alive, but it need not prevent a
+                        // Chat that does not execute that connector.
+                        Err(_) => {
+                            cacheable = false;
+                            crate::marketplace::connector_config::ConnectorConfigRevision::Legacy
+                        }
+                    };
+                if !config_revision.is_cacheable() {
+                    cacheable = false;
+                }
+                let active_credential_revision =
+                    match crate::finance_credentials::active_revision(&entry.id) {
+                        Ok(revision) => revision,
+                        Err(_) => {
+                            cacheable = false;
+                            None
+                        }
+                    };
+                ChatConnectorSeal {
+                    entry_id: entry.id,
+                    config_revision,
+                    active_credential_revision,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut seal = ChatConnectorAuthoritySeal {
+            version: CHAT_CONNECTOR_AUTHORITY_SEAL_VERSION,
+            bindings: binding_seals,
+            connectors: connector_seals,
+        };
+        canonicalize_chat_connector_authority_seal(&mut seal);
+        Ok(ChatConnectorAuthority {
+            capability_ids,
+            sha256: chat_connector_authority_sha256(&seal)?,
+            cacheable,
+        })
     })
 }
 

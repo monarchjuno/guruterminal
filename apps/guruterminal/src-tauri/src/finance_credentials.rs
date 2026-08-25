@@ -548,6 +548,20 @@ pub fn get(entry_id: &str) -> Result<Option<ActiveCredentialBundle>, FinanceCred
         }))
 }
 
+/// Returns the revision of the verified active credential, if one exists.
+///
+/// This deliberately returns only the revision needed to bind a Pi session
+/// cache to credential authority. It never constructs or exposes a credential
+/// bundle, and staged candidates do not affect the result.
+pub(crate) fn active_revision(entry_id: &str) -> Result<Option<String>, FinanceCredentialError> {
+    let _guard = operation_lock()
+        .lock()
+        .map_err(|_| FinanceCredentialError::Store)?;
+    Ok(load_locked(entry_id)?
+        .active
+        .map(|active| active.credential.revision))
+}
+
 pub fn has_active(entry_id: &str) -> Result<bool, FinanceCredentialError> {
     status(entry_id).map(|status| status.active)
 }
@@ -751,6 +765,40 @@ mod tests {
         assert_eq!(reloaded.verification, CredentialVerification::Verified);
         assert_eq!(reloaded.verified_at, Some(42));
         clean(entry);
+    }
+
+    #[test]
+    fn active_revision_returns_only_the_verified_active_revision() {
+        let entry = "test.active-revision";
+        clean(entry);
+        assert_eq!(active_revision(entry).unwrap(), None);
+
+        stage(entry, &bundle(&[("api_key", "first-value")])).unwrap();
+        let first_candidate_revision = candidate(entry).unwrap().unwrap().revision().to_owned();
+        assert_eq!(active_revision(entry).unwrap(), None);
+        assert_eq!(
+            finish_verification(
+                entry,
+                &first_candidate_revision,
+                VerificationOutcome::Verified,
+                10,
+            )
+            .unwrap(),
+            FinishVerification::Applied
+        );
+        assert_eq!(
+            active_revision(entry).unwrap().as_deref(),
+            Some(first_candidate_revision.as_str())
+        );
+
+        stage(entry, &bundle(&[("api_key", "replacement-value")])).unwrap();
+        assert_eq!(
+            active_revision(entry).unwrap().as_deref(),
+            Some(first_candidate_revision.as_str())
+        );
+
+        delete(entry).unwrap();
+        assert_eq!(active_revision(entry).unwrap(), None);
     }
 
     #[test]

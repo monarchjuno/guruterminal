@@ -45,6 +45,7 @@ pub enum ChatRole {
 pub enum ChatMessageStatus {
     Complete,
     Aborted,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,10 +356,13 @@ impl ChatMessage {
                 "user chat message cannot have a model lock",
             ));
         }
-        if self.status == ChatMessageStatus::Aborted {
+        if matches!(
+            self.status,
+            ChatMessageStatus::Aborted | ChatMessageStatus::Error
+        ) {
             if self.role != ChatRole::Assistant {
                 return Err(DomainError::Invalid(
-                    "only assistant chat messages may be aborted",
+                    "only assistant chat messages may be terminal failures",
                 ));
             }
             if self.memory_update.is_some()
@@ -366,7 +370,7 @@ impl ChatMessage {
                 || !self.artifact_refs.is_empty()
             {
                 return Err(DomainError::Invalid(
-                    "aborted chat messages cannot publish durable outputs",
+                    "terminally failed chat messages cannot publish durable outputs",
                 ));
             }
         }
@@ -439,7 +443,52 @@ pub struct PiSessionCache {
     #[serde(deserialize_with = "required_option")]
     pub leaf_id: Option<String>,
     pub harness_digest: String,
+    /// The stable app-owned Pi execution policy. This includes transport,
+    /// CWD, extension, and session-format compatibility.
+    ///
+    /// Caches written by an earlier host-context seal remain readable but
+    /// miss the additional surface and authority seals below, so they rebuild
+    /// cold without rejecting the canonical Chat.
+    #[serde(default, alias = "hostContextSha256")]
+    pub runtime_policy_sha256: Option<String>,
+    /// Hash of the static runtime/component surface. This makes capability
+    /// routing, component descriptions, and tool mappings exact across a
+    /// resumed Pi JSONL, independent of per-turn Memory flags.
+    #[serde(default)]
+    pub runtime_surface_sha256: Option<String>,
+    /// Digest of the non-secret connector authority snapshot: every binding,
+    /// global connector config revision, and active credential revision. Pi
+    /// JSONL can retain tool results, so a connector authority change always
+    /// forces a cold rebuild even when the component IDs remain unchanged.
+    #[serde(default)]
+    pub connector_authority_sha256: Option<String>,
+    /// Authority carried by the cached JSONL. A fresh Pi launch reinstalls a
+    /// runtime profile with these flags, so all Memory controls must match
+    /// exactly before we restore its prior tool-result context. Any change
+    /// rebuilds from the canonical SQLite transcript.
+    #[serde(default)]
+    pub memory_access_enabled: Option<bool>,
+    #[serde(default)]
+    pub memory_update_enabled: Option<bool>,
+    /// The effective Pi/provider session ID for this derived JSONL cache.
+    /// It rotates whenever the cache is rebuilt cold, so a reconstructed
+    /// SQLite transcript is not sent under a stale provider cache identity.
+    #[serde(default)]
+    pub derived_session_id: Option<String>,
     pub execution_model: ExecutionModelLock,
+}
+
+/// The non-secret execution inputs that must match before Pi JSONL tool
+/// results can be resumed for another Chat turn.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PiSessionCacheScope<'a> {
+    pub harness_digest: &'a str,
+    pub runtime_policy_sha256: &'a str,
+    pub runtime_surface_sha256: &'a str,
+    pub connector_authority_sha256: &'a str,
+    pub memory_access_enabled: bool,
+    pub memory_update_enabled: bool,
+    pub execution_model: &'a ExecutionModelLock,
 }
 
 impl PiSessionCache {
@@ -459,6 +508,36 @@ impl PiSessionCache {
             &self.harness_digest,
             "chat Pi session cache harness digest is invalid",
         )?;
+        if let Some(runtime_policy_sha256) = &self.runtime_policy_sha256 {
+            validate_sha256_digest(
+                runtime_policy_sha256,
+                "chat Pi session cache runtime policy digest is invalid",
+            )?;
+        }
+        if let Some(runtime_surface_sha256) = &self.runtime_surface_sha256 {
+            validate_sha256_digest(
+                runtime_surface_sha256,
+                "chat Pi session cache runtime surface digest is invalid",
+            )?;
+        }
+        if let Some(connector_authority_sha256) = &self.connector_authority_sha256 {
+            validate_sha256_digest(
+                connector_authority_sha256,
+                "chat Pi session cache connector authority digest is invalid",
+            )?;
+        }
+        if let Some(derived_session_id) = &self.derived_session_id {
+            if Uuid::parse_str(derived_session_id)
+                .ok()
+                .map(|id| id.to_string())
+                .as_deref()
+                != Some(derived_session_id.as_str())
+            {
+                return Err(DomainError::Invalid(
+                    "chat Pi session cache derived session id is invalid",
+                ));
+            }
+        }
         if self.execution_model.validate().is_err() {
             return Err(DomainError::Invalid(
                 "chat Pi session cache model lock is invalid",
@@ -467,8 +546,15 @@ impl PiSessionCache {
         Ok(())
     }
 
-    pub fn matches(&self, harness_digest: &str, execution_model: &ExecutionModelLock) -> bool {
-        self.harness_digest == harness_digest && &self.execution_model == execution_model
+    pub(crate) fn matches(&self, scope: &PiSessionCacheScope<'_>) -> bool {
+        self.harness_digest == scope.harness_digest
+            && self.runtime_policy_sha256.as_deref() == Some(scope.runtime_policy_sha256)
+            && self.runtime_surface_sha256.as_deref() == Some(scope.runtime_surface_sha256)
+            && self.connector_authority_sha256.as_deref() == Some(scope.connector_authority_sha256)
+            && self.memory_access_enabled == Some(scope.memory_access_enabled)
+            && self.memory_update_enabled == Some(scope.memory_update_enabled)
+            && self.derived_session_id.is_some()
+            && &self.execution_model == scope.execution_model
     }
 }
 
@@ -526,6 +612,31 @@ mod tests {
     use crate::settings::ExecutionModelLock;
     use std::collections::BTreeMap;
 
+    const DIGEST_A: &str = concat!(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    const DIGEST_B: &str = concat!(
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+    const DIGEST_C: &str = concat!(
+        "cccccccccccccccccccccccccccccccc",
+        "cccccccccccccccccccccccccccccccc"
+    );
+    const DIGEST_D: &str = concat!(
+        "dddddddddddddddddddddddddddddddd",
+        "dddddddddddddddddddddddddddddddd"
+    );
+    const DIGEST_E: &str = concat!(
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    );
+    const DIGEST_F: &str = concat!(
+        "ffffffffffffffffffffffffffffffff",
+        "ffffffffffffffffffffffffffffffff"
+    );
+
     fn model_lock() -> ExecutionModelLock {
         ExecutionModelLock {
             profile_id: "openai-codex/gpt-5.6-luna".into(),
@@ -537,19 +648,147 @@ mod tests {
         }
     }
 
+    fn cache_scope<'a>(execution_model: &'a ExecutionModelLock) -> PiSessionCacheScope<'a> {
+        PiSessionCacheScope {
+            harness_digest: DIGEST_B,
+            runtime_policy_sha256: DIGEST_C,
+            runtime_surface_sha256: DIGEST_D,
+            connector_authority_sha256: DIGEST_F,
+            memory_access_enabled: false,
+            memory_update_enabled: false,
+            execution_model,
+        }
+    }
+
     #[test]
-    fn session_cache_matches_only_the_sealed_harness_and_model() {
+    fn session_cache_matches_only_the_sealed_surface_authority_and_model() {
+        let model = model_lock();
+        let scope = cache_scope(&model);
         let cache = PiSessionCache {
-            entries_sha256: "a".repeat(64),
+            entries_sha256: DIGEST_A.into(),
             leaf_id: Some("leaf-1".into()),
-            harness_digest: "b".repeat(64),
-            execution_model: model_lock(),
+            harness_digest: DIGEST_B.into(),
+            runtime_policy_sha256: Some(DIGEST_C.into()),
+            runtime_surface_sha256: Some(DIGEST_D.into()),
+            connector_authority_sha256: Some(DIGEST_F.into()),
+            memory_access_enabled: Some(false),
+            memory_update_enabled: Some(false),
+            derived_session_id: Some("123e4567-e89b-42d3-a456-426614174000".into()),
+            execution_model: model.clone(),
         };
         cache.validate().unwrap();
-        assert!(cache.matches(&"b".repeat(64), &model_lock()));
-        assert!(!cache.matches(&"c".repeat(64), &model_lock()));
+        assert!(cache.matches(&scope));
+        assert!(!cache.matches(&PiSessionCacheScope {
+            harness_digest: DIGEST_E,
+            ..scope
+        }));
+        assert!(!cache.matches(&PiSessionCacheScope {
+            runtime_policy_sha256: DIGEST_E,
+            ..scope
+        }));
+        assert!(!cache.matches(&PiSessionCacheScope {
+            runtime_surface_sha256: DIGEST_E,
+            ..scope
+        }));
+        assert!(!cache.matches(&PiSessionCacheScope {
+            connector_authority_sha256: DIGEST_E,
+            ..scope
+        }));
         let mut other = model_lock();
         other.thinking_level = "high".into();
-        assert!(!cache.matches(&"b".repeat(64), &other));
+        assert!(!cache.matches(&PiSessionCacheScope {
+            execution_model: &other,
+            ..scope
+        }));
+        let mut legacy = cache.clone();
+        legacy.connector_authority_sha256 = None;
+        assert!(legacy.validate().is_ok());
+        assert!(!legacy.matches(&scope));
+    }
+
+    #[test]
+    fn session_cache_requires_an_exact_memory_authority_profile() {
+        let profiles = [(false, false), (false, true), (true, false), (true, true)];
+        for (cached_access, cached_update) in profiles {
+            let model = model_lock();
+            let scope = cache_scope(&model);
+            let cache = PiSessionCache {
+                entries_sha256: DIGEST_A.into(),
+                leaf_id: Some("leaf-1".into()),
+                harness_digest: DIGEST_B.into(),
+                runtime_policy_sha256: Some(DIGEST_C.into()),
+                runtime_surface_sha256: Some(DIGEST_D.into()),
+                connector_authority_sha256: Some(DIGEST_F.into()),
+                memory_access_enabled: Some(cached_access),
+                memory_update_enabled: Some(cached_update),
+                derived_session_id: Some("123e4567-e89b-42d3-a456-426614174000".into()),
+                execution_model: model.clone(),
+            };
+            for (current_access, current_update) in profiles {
+                assert_eq!(
+                    cache.matches(&PiSessionCacheScope {
+                        memory_access_enabled: current_access,
+                        memory_update_enabled: current_update,
+                        ..scope
+                    }),
+                    (cached_access, cached_update) == (current_access, current_update),
+                    "cached ({cached_access}, {cached_update}) vs current ({current_access}, {current_update})",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_session_cache_rebuilds_cold_without_rejecting_the_chat() {
+        let model = model_lock();
+        let cache = PiSessionCache {
+            entries_sha256: DIGEST_A.into(),
+            leaf_id: Some("leaf-1".into()),
+            harness_digest: DIGEST_B.into(),
+            runtime_policy_sha256: None,
+            runtime_surface_sha256: None,
+            connector_authority_sha256: None,
+            memory_access_enabled: None,
+            memory_update_enabled: None,
+            derived_session_id: None,
+            execution_model: model.clone(),
+        };
+        cache.validate().unwrap();
+        assert!(!cache.matches(&PiSessionCacheScope {
+            memory_access_enabled: true,
+            memory_update_enabled: true,
+            ..cache_scope(&model)
+        }));
+    }
+
+    #[test]
+    fn previous_host_context_seal_is_loaded_then_rebuilt_cold() {
+        let model = model_lock();
+        let cache = PiSessionCache {
+            entries_sha256: DIGEST_A.into(),
+            leaf_id: Some("leaf-1".into()),
+            harness_digest: DIGEST_B.into(),
+            runtime_policy_sha256: Some(DIGEST_C.into()),
+            runtime_surface_sha256: None,
+            connector_authority_sha256: None,
+            memory_access_enabled: None,
+            memory_update_enabled: None,
+            derived_session_id: None,
+            execution_model: model.clone(),
+        };
+        let mut encoded = serde_json::to_value(cache).unwrap();
+        let fields = encoded.as_object_mut().unwrap();
+        let old_digest = fields.remove("runtimePolicySha256").unwrap();
+        fields.insert("hostContextSha256".into(), old_digest);
+
+        let restored: PiSessionCache = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored.runtime_policy_sha256, Some(DIGEST_C.into()));
+        assert!(!restored.matches(&PiSessionCacheScope {
+            runtime_policy_sha256: DIGEST_D,
+            runtime_surface_sha256: DIGEST_E,
+            memory_access_enabled: true,
+            memory_update_enabled: true,
+            ..cache_scope(&model)
+        }));
     }
 }

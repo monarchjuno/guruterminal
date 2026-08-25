@@ -68,6 +68,10 @@ impl ChatControlReceiver {
     pub async fn recv(&mut self) -> Option<ChatControlRequest> {
         self.receiver.recv().await
     }
+
+    pub fn try_recv(&mut self) -> Option<ChatControlRequest> {
+        self.receiver.try_recv().ok()
+    }
 }
 
 impl ChatControlRequest {

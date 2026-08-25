@@ -28,10 +28,16 @@ use crate::process_lease::{
     ChildProcessLease, ProcessKind,
 };
 #[cfg(windows)]
-use crate::windows_fs::{metadata_is_reparse, open_directory_no_reparse, open_regular_no_reparse};
+use crate::windows_fs::{
+    add_open_reparse_point_flag, metadata_is_reparse, open_directory_no_reparse,
+    open_regular_no_reparse,
+};
 use crate::{
     agent_harness,
-    artifact_trust::{ensure_private_directory, verify_executable, VerifiedExecutable},
+    artifact_trust::{
+        ensure_private_directory, ensure_private_regular_file, read_private_regular_file_bounded,
+        verify_executable, VerifiedExecutable,
+    },
     process_lease::ProcessLeaseError,
     settings::{PI_THINKING_LEVELS, PROVIDER_CREDENTIAL_ENVIRONMENTS},
 };
@@ -57,6 +63,14 @@ const MAX_RPC_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const PI_EVENT_BUFFER_CAPACITY: usize = 1_024;
 const MAX_HOST_CONTEXT_BYTES: usize = 64 * 1024;
 const RPC_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+const PI_PROJECT_SETTINGS_MAX_BYTES: u64 = 128;
+// Do not inherit a user/global transport timeout here: this process is an
+// app-owned Chat runtime and its stop behavior is part of the product contract.
+const PI_PROJECT_SETTINGS: &[u8] = b"{\"transport\":\"sse\",\"httpIdleTimeoutMs\":300000}\n";
+/// Versioned identity of the app-owned Pi cache environment. Bump this when a
+/// change makes an existing derived Pi JSONL unsafe to resume (for example,
+/// its CWD, transport, or extension/session contract changes).
+pub(crate) const PI_SESSION_CACHE_POLICY_VERSION: &str = "stable-session-cwd-sse/v6";
 
 #[derive(Debug, Error)]
 pub enum PiError {
@@ -232,6 +246,9 @@ impl PiLaunchConfig {
             self.extension.to_string_lossy().into_owned(),
             "--system-prompt".into(),
             GURUTERMINAL_SYSTEM_PROMPT.into(),
+            // A trusted run-private project must not discover an append prompt.
+            "--append-system-prompt".into(),
+            String::new(),
             "--no-skills".into(),
         ]);
         for skill_file in &self.skill_files {
@@ -242,6 +259,9 @@ impl PiLaunchConfig {
             "--no-prompt-templates".into(),
             "--no-themes".into(),
             "--no-context-files".into(),
+            // `PiProcess::spawn` writes the only trusted project setting into
+            // a stable, private Chat working directory before launch.
+            "--approve".into(),
             "--offline".into(),
             "--provider".into(),
             self.provider.clone(),
@@ -298,6 +318,45 @@ impl PiLaunchConfig {
         );
         env
     }
+}
+
+/// Installs the fixed transport policy in the caller's stable, app-private
+/// Chat CWD. Existing contents are never overwritten: a changed file is a
+/// launch failure rather than an opportunity to trust altered project input.
+fn ensure_pi_project_settings(config: &PiLaunchConfig) -> Result<(), PiError> {
+    let directory = config.working_dir.join(".pi");
+    ensure_private_directory(&directory).map_err(|_| PiError::InvalidLaunchValue)?;
+    let path = directory.join("settings.json");
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {
+            let existing = read_private_regular_file_bounded(&path, PI_PROJECT_SETTINGS_MAX_BYTES)
+                .map_err(|_| PiError::InvalidLaunchValue)?;
+            if existing == PI_PROJECT_SETTINGS {
+                return Ok(());
+            }
+            return Err(PiError::InvalidLaunchValue);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(PiError::Io(error)),
+    }
+
+    // The Chat runtime gives the Pi session a stable, app-private CWD.
+    // Creating this file once avoids a mutable project settings surface.
+    ensure_private_regular_file(&path).map_err(|_| PiError::InvalidLaunchValue)?;
+    let mut options = OpenOptions::new();
+    options.write(true).truncate(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    add_open_reparse_point_flag(&mut options);
+    let mut file = options.open(&path)?;
+    std::io::Write::write_all(&mut file, PI_PROJECT_SETTINGS)?;
+    file.sync_all()?;
+    let verified = read_private_regular_file_bounded(&path, PI_PROJECT_SETTINGS_MAX_BYTES)
+        .map_err(|_| PiError::InvalidLaunchValue)?;
+    (verified == PI_PROJECT_SETTINGS)
+        .then_some(())
+        .ok_or(PiError::InvalidLaunchValue)
 }
 
 fn validate_session_config(session: &PiSessionConfig) -> Result<(), PiError> {
@@ -709,6 +768,14 @@ impl Drop for PiProcess {
 }
 
 impl PiProcess {
+    /// Identifies the Unix process group that owns Pi's derived session files.
+    /// A caller must quarantine those files if shutdown cannot confirm this
+    /// group has exited.
+    #[cfg(unix)]
+    pub(crate) const fn process_group_id(&self) -> i32 {
+        self.process_group_id
+    }
+
     pub async fn spawn(config: PiLaunchConfig) -> Result<Self, PiError> {
         config.validate()?;
         for directory in [
@@ -722,6 +789,7 @@ impl PiProcess {
             ensure_private_directory(&session.directory)
                 .map_err(|_| PiError::InvalidLaunchValue)?;
         }
+        ensure_pi_project_settings(&config)?;
         let host_context_file = write_host_context_file(&config)?;
 
         Self::spawn_command(

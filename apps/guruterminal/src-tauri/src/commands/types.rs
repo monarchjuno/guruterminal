@@ -291,6 +291,13 @@ pub enum ChatStreamEvent {
     Error {
         run_id: String,
         message: String,
+        message_id: String,
+        final_text: String,
+        created_at: String,
+        execution_model: Box<ExecutionModelLock>,
+        agent_harness: Box<AgentHarnessSnapshot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress: Option<ChatProgress>,
     },
 }
 
@@ -393,6 +400,7 @@ pub(crate) fn chat_dto(chat: &ChatSession) -> Result<ChatThreadDto, CommandError
                 status: match message.status {
                     ChatMessageStatus::Complete => "complete",
                     ChatMessageStatus::Aborted => "aborted",
+                    ChatMessageStatus::Error => "error",
                 }
                 .into(),
                 memory_refs: message.memory_refs.iter().map(memory_ref_dto).collect(),
