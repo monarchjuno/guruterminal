@@ -122,6 +122,29 @@ function Get-IsolatedInstallationCleanupState(
     return $remaining
 }
 
+function Wait-ForIsolatedInstallationCleanup(
+    [string]$InstallRoot,
+    [string]$UninstallRegistryPath,
+    [string]$ProductRegistryPath
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while ((Test-Path -LiteralPath $InstallRoot) -or
+           (Test-Path -LiteralPath $UninstallRegistryPath) -or
+           (Test-Path -LiteralPath $ProductRegistryPath)) {
+        if ([DateTime]::UtcNow -ge $deadline) {
+            $remaining = @(Get-IsolatedInstallationCleanupState `
+                $InstallRoot `
+                $UninstallRegistryPath `
+                $ProductRegistryPath)
+            if ($remaining.Count -eq 0) {
+                return
+            }
+            throw "Final package check did not remove the isolated installation. $($remaining -join '; ')"
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
 if (-not $IsWindows -or -not [Environment]::Is64BitOperatingSystem) {
     throw "Final NSIS package inspection requires 64-bit Windows."
 }
@@ -394,13 +417,10 @@ try {
             }
         }
         if ($installStarted) {
-            $remaining = @(Get-IsolatedInstallationCleanupState `
+            Wait-ForIsolatedInstallationCleanup `
                 $installRoot `
                 $uninstallRegistryPath `
-                $productRegistryPath)
-            if ($remaining.Count -ne 0) {
-                throw "Final package check did not remove the isolated installation. $($remaining -join '; ')"
-            }
+                $productRegistryPath
         }
     } catch {
         $cleanupError = $_
