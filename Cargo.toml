@@ -1,6 +1,6 @@
 [package]
 name = "guruterminal-core"
-version = "0.0.1"
+version = "0.0.1-rc.1"
 edition = "2021"
 rust-version = "1.82"
 description = "Internal memory runtime bundled with the Guru Terminal desktop app"
