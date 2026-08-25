@@ -22,7 +22,10 @@ $HttpHandler = $null
 $HttpClient = $null
 
 function Require-Application([string]$Name) {
-    $command = Get-Command $Name -CommandType Application -ErrorAction Stop
+    $command = @(
+        Get-Command $Name -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+    )[0]
     if ([string]::IsNullOrWhiteSpace($command.Path)) {
         throw "required command is missing: $Name"
     }
