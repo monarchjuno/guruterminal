@@ -29,7 +29,7 @@
 # Tool use
 
 - Before saying a requested integration or data source is unavailable, inspect the compact capability index for the user's provider or task term.
-- If the index names the needed component and the tool names, load it directly with `capability_load`.
+- If the index names the needed component and the tool names, load it directly with `capability_load`. Use `components[].id` as the load ID; `provider_ids` identify the provider argument for a component's tools after it is loaded.
 - Use `capability_search` only when the compact index is insufficient to choose.
 - Do not generalize a capability missing from the current run into a claim about the whole product or Marketplace.
 - Workbench Tools are confined to the current workspace.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,6 +34,17 @@ test("pinned Pi catalog includes Grok 4.6 for xAI", () => {
   assert.deepEqual(model?.input, ["text", "image"]);
   assert.equal(model?.contextWindow, 500_000);
   assert.equal(model?.maxTokens, 500_000);
+});
+
+test("keeps provider-result nofollow protection off Windows only", async () => {
+  const moduleUrl = `${pathToFileURL(join(import.meta.dirname, "guruterminal-provider-extension.mjs"))}?nofollow=${Date.now()}`;
+  const { resultOpenFlagsForPlatform } = await import(moduleUrl);
+
+  assert.equal(resultOpenFlagsForPlatform("win32"), constants.O_WRONLY);
+  assert.equal(
+    resultOpenFlagsForPlatform("darwin"),
+    constants.O_WRONLY | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0),
+  );
 });
 
 test("provider result writes retry until every byte is published", async () => {
