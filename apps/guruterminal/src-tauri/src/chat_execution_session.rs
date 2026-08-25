@@ -398,6 +398,7 @@ fn validate_pinned_directory(
     if metadata_untrusted(&path_metadata) || !path_metadata.is_dir() {
         return Err(CommandError::internal(format!("{label} binding changed")));
     }
+    #[cfg(unix)]
     let guard_metadata = guard.file().metadata().map_err(map_io)?;
     #[cfg(unix)]
     if guard_metadata.dev() != path_metadata.dev() || guard_metadata.ino() != path_metadata.ino() {

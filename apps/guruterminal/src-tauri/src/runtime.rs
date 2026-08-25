@@ -6,9 +6,11 @@ use rustix::{
 };
 use serde_json::Value;
 #[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     io,
     path::{Path, PathBuf},
     process::Stdio,

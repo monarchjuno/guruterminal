@@ -426,6 +426,7 @@ pub fn read_memory_record(
     {
         let source_root = workspace.join("guruterminal");
         let target = source_root.join(&memory_relative);
+        #[cfg(all(not(unix), not(windows)))]
         let parent = target.parent().ok_or(SnapshotError::UnsupportedEntry)?;
         #[cfg(windows)]
         let _directory_guards = windows_target_directory_guards(workspace, &memory_relative)?;

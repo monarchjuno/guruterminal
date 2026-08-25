@@ -1,6 +1,8 @@
+#[cfg(unix)]
+use std::fs::File;
 use std::{
     collections::HashMap,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
