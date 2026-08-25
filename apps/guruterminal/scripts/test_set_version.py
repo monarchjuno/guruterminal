@@ -25,20 +25,18 @@ def write_json(path: Path, value: object) -> None:
     write_text(path, json.dumps(value, indent=2) + "\n")
 
 
-def write_cargo_lock(path: Path, package_name: str, version: str) -> None:
-    write_text(
-        path,
-        "\n".join(
+def write_cargo_lock(path: Path, *packages: tuple[str, str]) -> None:
+    lines = ["version = 4", ""]
+    for package_name, version in packages:
+        lines.extend(
             [
-                "version = 4",
-                "",
                 "[[package]]",
                 f'name = "{package_name}"',
                 f'version = "{version}"',
                 "",
             ]
-        ),
-    )
+        )
+    write_text(path, "\n".join(lines))
 
 
 def write_package_lock(path: Path, name: str, version: str) -> None:
@@ -68,7 +66,7 @@ def seed_repository(root: Path, version: str = "0.0.1") -> None:
             ]
         ),
     )
-    write_cargo_lock(root / "Cargo.lock", "guruterminal-core", version)
+    write_cargo_lock(root / "Cargo.lock", ("guruterminal-core", version))
 
     desktop = root / "apps/guruterminal"
     write_json(desktop / "package.json", {"name": "desktop", "version": version})
@@ -89,7 +87,11 @@ def seed_repository(root: Path, version: str = "0.0.1") -> None:
             ]
         ),
     )
-    write_cargo_lock(desktop / "src-tauri/Cargo.lock", "guruterminal-desktop", version)
+    write_cargo_lock(
+        desktop / "src-tauri/Cargo.lock",
+        ("guruterminal-desktop", version),
+        ("guruterminal-core", version),
+    )
     write_json(
         desktop / "src-tauri/tauri.conf.json",
         {"productName": "Guru Terminal", "version": version},
@@ -127,10 +129,11 @@ class SetVersionTest(unittest.TestCase):
             (desktop / "src-tauri/Cargo.toml").read_text(),
         )
         self.assertIn(f'version = "{version}"', (root / "Cargo.lock").read_text())
-        self.assertIn(
-            f'version = "{version}"',
-            (desktop / "src-tauri/Cargo.lock").read_text(),
-        )
+        desktop_lock = (desktop / "src-tauri/Cargo.lock").read_text()
+        for package_name in ("guruterminal-desktop", "guruterminal-core"):
+            self.assertIn(
+                f'name = "{package_name}"\nversion = "{version}"', desktop_lock
+            )
         for path in [desktop / "package.json", desktop / "compute/package.json"]:
             self.assertEqual(json.loads(path.read_text())["version"], version)
         for path in [
