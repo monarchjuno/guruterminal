@@ -23,6 +23,14 @@ on:
         description: HTTPS evidence for a clean Windows N-1 to N in-app update
         required: true
         type: string
+      macos_product_acceptance_evidence_url:
+        description: Credential-free HTTPS evidence for the clean signed macOS Chat and Memory acceptance flow
+        required: true
+        type: string
+      windows_product_acceptance_evidence_url:
+        description: Credential-free HTTPS evidence for the clean signed Windows Chat and Memory acceptance flow
+        required: true
+        type: string
       windows_candidate_set_sha256:
         description: SHA-256 of candidate SHA256SUMS used by the Windows update test
         required: true
@@ -34,6 +42,16 @@ on:
         type: boolean
       confirm_windows_update:
         description: I verified install, in-app update, restart, and retained data on Windows
+        required: true
+        default: false
+        type: boolean
+      confirm_macos_product_acceptance:
+        description: I verified the V1 Chat and Memory acceptance flow on the clean signed macOS candidate
+        required: true
+        default: false
+        type: boolean
+      confirm_windows_product_acceptance:
+        description: I verified the V1 Chat and Memory acceptance flow on the clean signed Windows candidate
         required: true
         default: false
         type: boolean
@@ -77,11 +95,15 @@ jobs:
           PREDECESSOR_TAG: ${{ inputs.predecessor_tag }}
           CONFIRM_MACOS: ${{ inputs.confirm_macos_update }}
           CONFIRM_WINDOWS: ${{ inputs.confirm_windows_update }}
+          CONFIRM_MACOS_PRODUCT_ACCEPTANCE: ${{ inputs.confirm_macos_product_acceptance }}
+          CONFIRM_WINDOWS_PRODUCT_ACCEPTANCE: ${{ inputs.confirm_windows_product_acceptance }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$CONFIRM_MACOS" = true
           test "$CONFIRM_WINDOWS" = true
+          test "$CONFIRM_MACOS_PRODUCT_ACCEPTANCE" = true
+          test "$CONFIRM_WINDOWS_PRODUCT_ACCEPTANCE" = true
           test "$GITHUB_REF_TYPE" = tag
           test "$GITHUB_REF_NAME" = "$CANDIDATE_TAG"
           LATEST_RESPONSE="$RUNNER_TEMP/latest-release-response.txt"
@@ -362,6 +384,8 @@ jobs:
           MACOS_CANDIDATE_SET_SHA256: ${{ inputs.macos_candidate_set_sha256 }}
           WINDOWS_EVIDENCE_URL: ${{ inputs.windows_update_evidence_url }}
           WINDOWS_CANDIDATE_SET_SHA256: ${{ inputs.windows_candidate_set_sha256 }}
+          MACOS_PRODUCT_ACCEPTANCE_EVIDENCE_URL: ${{ inputs.macos_product_acceptance_evidence_url }}
+          WINDOWS_PRODUCT_ACCEPTANCE_EVIDENCE_URL: ${{ inputs.windows_product_acceptance_evidence_url }}
           SOURCE_COMMIT: ${{ needs.identify.outputs.source_commit }}
           RELEASE_ID: ${{ needs.identify.outputs.release_id }}
         run: |
@@ -378,6 +402,8 @@ jobs:
             --macos-candidate-set-sha256 "$MACOS_CANDIDATE_SET_SHA256" \
             --windows-evidence-url "$WINDOWS_EVIDENCE_URL" \
             --windows-candidate-set-sha256 "$WINDOWS_CANDIDATE_SET_SHA256" \
+            --macos-product-acceptance-evidence-url "$MACOS_PRODUCT_ACCEPTANCE_EVIDENCE_URL" \
+            --windows-product-acceptance-evidence-url "$WINDOWS_PRODUCT_ACCEPTANCE_EVIDENCE_URL" \
             --output qualification/qualification.json
 
       - name: Upload qualification receipt

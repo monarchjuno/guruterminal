@@ -178,7 +178,7 @@ def write_receipt(arguments: argparse.Namespace) -> int:
         arguments.workflow_run_id, "qualification workflow run id"
     )
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
         "repository": arguments.repository,
         "candidate_tag": arguments.candidate_tag,
         "candidate_version": candidate_version,
@@ -212,6 +212,24 @@ def write_receipt(arguments: argparse.Namespace) -> int:
                 ),
             },
         },
+        "product_acceptance": {
+            "macos-aarch64": {
+                "result": "passed",
+                "evidence_url": evidence_url(
+                    arguments.macos_product_acceptance_evidence_url,
+                    "macOS product acceptance evidence URL",
+                ),
+                "candidate_set_sha256": candidate_digest,
+            },
+            "windows-x86_64": {
+                "result": "passed",
+                "evidence_url": evidence_url(
+                    arguments.windows_product_acceptance_evidence_url,
+                    "Windows product acceptance evidence URL",
+                ),
+                "candidate_set_sha256": candidate_digest,
+            },
+        },
     }
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(
@@ -238,9 +256,10 @@ def verify_receipt(arguments: argparse.Namespace) -> int:
         "candidate_set_sha256",
         "qualification_workflow_run_id",
         "platforms",
+        "product_acceptance",
     }
-    if set(receipt) != required or receipt["schema_version"] != 1:
-        raise RuntimeError("qualification receipt schema is not exactly version 1")
+    if set(receipt) != required or receipt["schema_version"] != 2:
+        raise RuntimeError("qualification receipt schema is not exactly version 2")
     candidate_version = validate_identity(
         candidate_tag=arguments.candidate_tag,
         previous_tag=receipt["qualified_predecessor_tag"],
@@ -283,6 +302,31 @@ def verify_receipt(arguments: argparse.Namespace) -> int:
             f"{platform} candidate-set digest",
             receipt["candidate_set_sha256"],
         )
+    product_acceptance = receipt["product_acceptance"]
+    if (
+        not isinstance(product_acceptance, dict)
+        or set(product_acceptance) != expected_platforms
+    ):
+        raise RuntimeError(
+            "qualification receipt must cover clean signed product acceptance on both supported platforms"
+        )
+    for platform, result in product_acceptance.items():
+        if not isinstance(result, dict) or set(result) != {
+            "result",
+            "evidence_url",
+            "candidate_set_sha256",
+        }:
+            raise RuntimeError(f"product acceptance result is malformed: {platform}")
+        if result["result"] != "passed":
+            raise RuntimeError(f"product acceptance did not pass: {platform}")
+        evidence_url(
+            result["evidence_url"], f"{platform} product acceptance evidence URL"
+        )
+        required_candidate_digest(
+            result["candidate_set_sha256"],
+            f"{platform} product acceptance candidate-set digest",
+            receipt["candidate_set_sha256"],
+        )
     return 0
 
 
@@ -317,6 +361,8 @@ def main() -> int:
     write.add_argument("--macos-candidate-set-sha256", required=True)
     write.add_argument("--windows-evidence-url", required=True)
     write.add_argument("--windows-candidate-set-sha256", required=True)
+    write.add_argument("--macos-product-acceptance-evidence-url", required=True)
+    write.add_argument("--windows-product-acceptance-evidence-url", required=True)
     write.add_argument("--output", required=True, type=Path)
     write.set_defaults(handler=write_receipt)
 
