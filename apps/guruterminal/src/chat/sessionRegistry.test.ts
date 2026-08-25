@@ -102,4 +102,80 @@ describe("ChatSessionRegistry durable progress", () => {
 
     registry.dispose();
   });
+
+  it("replaces streamed partial text with the canonical native error terminal", async () => {
+    const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });
+    vi.spyOn(bridge, "chatSend").mockImplementation(async (request, observer) => {
+      observer({ type: "started", run_id: request.run_id });
+      observer({
+        type: "delta",
+        run_id: request.run_id,
+        text: "Partial provider answer.",
+      });
+      observer({
+        type: "error",
+        run_id: request.run_id,
+        message: "Response could not be completed.",
+        message_id: "assistant-canonical-error",
+        final_text: "Response could not be completed.",
+        created_at: "2026-08-12T00:00:01.000Z",
+        execution_model: {
+          profile_id: "model-test",
+          name: "Test model",
+          provider: "test",
+          model: "test-model",
+          thinking_level: "medium",
+          run_options: {},
+        },
+        agent_harness: {
+          schema: "guruterminal-harness/1",
+          mode: "chat",
+          skill_ids: [],
+          capability_ids: [],
+          digest: "a".repeat(64),
+        },
+      });
+      return { run_id: request.run_id };
+    });
+
+    const registry = new ChatSessionRegistry(bridge, {
+      onArtifact: vi.fn(),
+      onMessages: vi.fn(),
+      onStatus: vi.fn(),
+      onTitle: vi.fn(),
+    });
+    const chat = registry.ensure(thread("thread-error"));
+    try {
+      await chat.sendMessage(
+        { text: "cause a terminal error" },
+        {
+          body: {
+            guru_id: "guru-quality",
+            thread_id: "thread-error",
+            use_memory: false,
+            update_memory: false,
+            model_profile_id: "model-test",
+            thinking_level: "medium",
+            run_options: {},
+          },
+        },
+      );
+    } catch {
+      // AI SDK reports the terminal failure to the caller after it has applied
+      // the native terminal metadata to the in-memory transcript.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const assistant = chat.messages
+      .map(fromGuruUIMessage)
+      .find((message) => message.role === "assistant");
+    expect(assistant).toMatchObject({
+      id: "assistant-canonical-error",
+      status: "error",
+      content: "Response could not be completed.",
+      created_at: "2026-08-12T00:00:01.000Z",
+    });
+
+    registry.dispose();
+  });
 });

@@ -50,6 +50,7 @@ export function useChatSessions(bridge: GuruTerminalBridge) {
       const current = threadsByGuruRef.current[guruId] ?? [];
       const nextThreads =
         typeof action === "function" ? action(current) : action;
+      if (nextThreads === current) return;
       const next = {
         ...threadsByGuruRef.current,
         [guruId]: nextThreads,

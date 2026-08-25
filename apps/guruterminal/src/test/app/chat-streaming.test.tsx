@@ -171,6 +171,75 @@ describe("Guru Terminal · Chat streaming and concurrency", () => {
     ).toBeInTheDocument();
   });
 
+  it("settles repeated partial deltas at a canonical terminal error", async () => {
+    const user = userEvent.setup();
+    const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(bridge, "chatSend").mockImplementation(async (request, observer) => {
+      observer({ type: "started", run_id: request.run_id });
+      for (let line = 1; line <= 10; line += 1) {
+        observer({
+          type: "delta",
+          run_id: request.run_id,
+          text: `Partial line ${line}.\n`,
+        });
+      }
+      observer({
+        type: "error",
+        run_id: request.run_id,
+        message: "Response could not be completed.",
+        message_id: "assistant-canonical-stream-error",
+        final_text: "Response could not be completed.",
+        created_at: "2026-08-25T00:00:01.000Z",
+        execution_model: {
+          profile_id: "model-test",
+          name: "GPT-5.6 Luna",
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+          thinking_level: "max",
+          run_options: {},
+        },
+        agent_harness: {
+          schema: "guruterminal-harness/1",
+          mode: "chat",
+          skill_ids: [],
+          capability_ids: [],
+          digest: "a".repeat(64),
+        },
+      });
+      return { run_id: request.run_id };
+    });
+    try {
+      await openApp(bridge);
+      await user.type(
+        screen.getByRole("textbox", { name: "Message Guru" }),
+        "Return a terminal error after streaming.",
+      );
+      await user.click(screen.getByRole("button", { name: "Send" }));
+
+      const terminal = await screen.findByText(
+        (content, element) =>
+          content === "Response could not be completed." &&
+          Boolean(element?.closest("article")),
+      );
+      expect(terminal.closest("article")).toHaveClass("error");
+      expect(screen.queryByText("Partial line 10.")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(
+          screen.getByRole("textbox", { name: "Message Guru" }),
+        ).toBeEnabled(),
+      );
+      expect(
+        consoleError.mock.calls
+          .flat()
+          .map((value) => String(value))
+          .join(" "),
+      ).not.toContain("Maximum update depth exceeded");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("runs distinct Gurus concurrently and stops only the selected thread", async () => {
     const user = userEvent.setup();
     const bridge = new MockGuruTerminalBridge({ delay_ms: 100 });
@@ -262,6 +331,78 @@ describe("Guru Terminal · Chat streaming and concurrency", () => {
     const workspace = await bridge.guruSelect("guru-quality");
     expect(workspace.threads[0]?.messages.at(-1)?.status).toBe("aborted");
   });
+
+  it.each([
+    {
+      status: "complete" as const,
+      content: "Canonical completion won the Stop race.",
+    },
+    {
+      status: "error" as const,
+      content: "Canonical failure won the Stop race.",
+    },
+  ])(
+    "keeps the canonical $status terminal when Stop loses the terminal race",
+    async ({ status, content }) => {
+      const user = userEvent.setup();
+      const bridge = new MockGuruTerminalBridge({ delay_ms: 0 });
+      const originalSelect = bridge.guruSelect.bind(bridge);
+      const stale = await originalSelect("guru-quality");
+      const canonical = structuredClone(stale);
+      const thread = canonical.threads[0]!;
+      thread.messages.push(
+        {
+          id: "user-stop-terminal-race",
+          role: "user",
+          content: "Race the native terminal boundary",
+          created_at: "2026-08-25T00:00:00.000Z",
+          status: "complete",
+        },
+        {
+          id: `assistant-stop-terminal-${status}`,
+          role: "assistant",
+          content,
+          created_at: "2026-08-25T00:00:01.000Z",
+          status,
+        },
+      );
+      let selectionCount = 0;
+      vi.spyOn(bridge, "guruSelect").mockImplementation((guruId) => {
+        if (guruId !== "guru-quality") return originalSelect(guruId);
+        selectionCount += 1;
+        return Promise.resolve(selectionCount === 1 ? stale : canonical);
+      });
+      vi.spyOn(bridge, "runActivityList").mockResolvedValue([]);
+      const chatAbort = vi.spyOn(bridge, "chatAbort").mockResolvedValue();
+      vi.spyOn(bridge, "chatSend").mockImplementation(async (request, observer) => {
+        observer({ type: "started", run_id: request.run_id });
+        observer({
+          type: "delta",
+          run_id: request.run_id,
+          text: "Provisional response that must be replaced.",
+        });
+        return { run_id: request.run_id };
+      });
+      await openApp(bridge);
+
+      await user.type(
+        screen.getByRole("textbox", { name: "Message Guru" }),
+        "Race the native terminal boundary",
+      );
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText("Provisional response that must be replaced.");
+      await user.click(screen.getByRole("button", { name: "Stop response" }));
+
+      await waitFor(() => expect(chatAbort).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(content)).toBeVisible();
+      expect(
+        screen.queryByText("Provisional response that must be replaced."),
+      ).not.toBeInTheDocument();
+      expect(
+        document.querySelector(`article.message.assistant.${status}`),
+      ).toBeVisible();
+    },
+  );
 
   it("keeps two threads of the same Guru independently live", async () => {
     const user = userEvent.setup();

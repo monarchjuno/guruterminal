@@ -369,4 +369,14 @@ export type ChatStreamEvent =
       agent_harness: AgentHarnessSnapshot;
     }
   | { type: "aborted"; run_id: string }
-  | { type: "error"; run_id: string; message: string };
+  | {
+      type: "error";
+      run_id: string;
+      message: string;
+      message_id: string;
+      final_text: string;
+      created_at: string;
+      execution_model: ExecutionModelLock;
+      agent_harness: AgentHarnessSnapshot;
+      progress?: ChatProgress;
+    };

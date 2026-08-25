@@ -66,6 +66,8 @@ const messageText = (message: GuruUIMessage) =>
     .map((part) => part.text)
     .join("");
 
+const UNKNOWN_MESSAGE_CREATED_AT = "1970-01-01T00:00:00.000Z";
+
 const dataUrlPayload = (file: FileUIPart) => {
   const match = file.url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/);
   if (!match) throw new Error("Attachment data is unavailable.");
@@ -164,7 +166,7 @@ export const fromGuruUIMessage = (message: GuruUIMessage): ChatMessage => {
       message.role === "assistant" && message.metadata?.final_text !== undefined
         ? message.metadata.final_text
         : messageText(message),
-    created_at: message.metadata?.created_at ?? new Date().toISOString(),
+    created_at: message.metadata?.created_at ?? UNKNOWN_MESSAGE_CREATED_AT,
     status,
     memory_refs: memoryPart?.data,
     memory_update: memoryUpdatePart?.data,
@@ -250,15 +252,37 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
           if (!abortSignal?.aborted) controller.close();
           abortSignal?.removeEventListener("abort", abortNativeRun);
         };
-        const fail = (message: string) => {
-          startResponse();
+        const fail = (
+          message: string,
+          terminal?: Extract<ChatStreamEvent, { type: "error" }>,
+        ) => {
+          startResponse(terminal?.created_at);
+          const finalText = terminal?.final_text ?? message;
           if (!hasText) {
             hasText = true;
-            enqueue({ type: "text-delta", id: textId, delta: message });
+            enqueue({ type: "text-delta", id: textId, delta: finalText });
+          }
+          if (terminal?.progress) {
+            enqueue({
+              type: "data-progress",
+              id: `progress-${responseId}`,
+              data: terminal.progress,
+            });
           }
           enqueue({
             type: "message-metadata",
-            messageMetadata: { status: "error" },
+            messageMetadata: {
+              status: "error",
+              ...(terminal
+                ? {
+                    native_message_id: terminal.message_id,
+                    final_text: terminal.final_text,
+                    created_at: terminal.created_at,
+                    execution_model: terminal.execution_model,
+                    agent_harness: terminal.agent_harness,
+                  }
+                : {}),
+            },
           });
           enqueue({ type: "text-end", id: textId });
           enqueue({ type: "error", errorText: message });
@@ -315,7 +339,9 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
           }
 
           startResponse(
-            event.type === "completed" ? event.created_at : undefined,
+            event.type === "completed" || event.type === "error"
+              ? event.created_at
+              : undefined,
           );
           if (event.type === "memory") {
             enqueue({ type: "data-memory", data: event.memories });
@@ -394,7 +420,7 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
             close();
             return;
           }
-          fail(event.message);
+          fail(event.message, event);
         };
 
         void this.bridge

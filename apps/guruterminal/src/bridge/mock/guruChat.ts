@@ -27,7 +27,6 @@ import type {
   MemoryUpdateResult,
   StreamObserver,
 } from "../../types";
-import { errorMessage } from "../../errors";
 import {
   DEFAULT_AGENT_SKILL_IDS,
   clone,
@@ -773,10 +772,39 @@ const streamChat = async (
         run_id,
       });
     } else {
+      progress.finishedAtMs = Date.now();
+      for (const item of progress.items) {
+        if (item.kind !== "commentary" && item.status === "running") {
+          item.status = "failed";
+          item.finishedAtMs = progress.finishedAtMs;
+        }
+      }
+      if (thread) {
+        thread.messages.push({
+          id: message_id,
+          role: "assistant",
+          content: "Response could not be completed.",
+          created_at,
+          status: "error",
+          memory_revision: request.use_memory
+            ? "mock-tree-revision"
+            : undefined,
+          execution_model: clone(execution_model),
+          agent_harness,
+          progress: clone(progress),
+        });
+        thread.updated_at = created_at;
+      }
       observer({
         type: "error",
         run_id,
-        message: errorMessage(error, "Failed to generate a response."),
+        message: "Response could not be completed.",
+        message_id,
+        final_text: "Response could not be completed.",
+        created_at,
+        execution_model: clone(execution_model),
+        agent_harness: clone(agent_harness),
+        progress: clone(progress),
       });
     }
   } finally {
