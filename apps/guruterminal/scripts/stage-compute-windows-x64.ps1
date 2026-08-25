@@ -23,7 +23,7 @@ if (-not (Test-Path -LiteralPath $runtimeRoot)) {
     throw "Stage Pi before staging the compute worker."
 }
 
-& npm ci --prefix $computeRoot --ignore-scripts
+npm ci --prefix $computeRoot --ignore-scripts
 if ($LASTEXITCODE -ne 0) { throw "Compute runtime npm install failed." }
 $installedPyodide = (Get-Content -LiteralPath (Join-Path $computeRoot "node_modules\pyodide\package.json") -Raw | ConvertFrom-Json).version
 if ($installedPyodide -ne $pyodideVersion) {
