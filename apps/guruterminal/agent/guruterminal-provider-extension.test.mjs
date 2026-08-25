@@ -83,7 +83,7 @@ test("xAI subscription OAuth skips native search without exposing the credential
 test("persists credentials through Pi storage without returning secrets", async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), "guruterminal-provider-extension-"));
   const resultPath = join(temporary, "result.json");
-  writeFileSync(resultPath, "", { mode: 0o600 });
+  writeFileSync(resultPath, "stale result".repeat(8_192), { mode: 0o600 });
   process.env.PI_CODING_AGENT_DIR = temporary;
   process.env.GURUTERMINAL_PROVIDER_RESULT_FILE = resultPath;
   process.env.GURUTERMINAL_PROVIDER_API_KEY = "api-key-secret";
