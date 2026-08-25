@@ -118,7 +118,9 @@ jobs:
     name: Native Windows interaction
     needs: verify
     runs-on: windows-latest
-    timeout-minutes: 45
+    # Allow one cold Tauri build plus the two warm launches required by the
+    # full UI suite and two-launch Memory persistence contract.
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -171,7 +173,7 @@ jobs:
         shell: pwsh
         run: apps/guruterminal/scripts/stage-windows-x64.ps1
 
-      - name: Run native Windows smoke
+      - name: Run native Windows interaction regression suite
         working-directory: apps/guruterminal/e2e
         shell: pwsh
         env:
@@ -179,7 +181,11 @@ jobs:
           # A fresh Windows runner needs a 20-minute cold-build budget before
           # its WebDriver endpoint can bind. Local runs retain the five-minute default.
           GURUTERMINAL_E2E_STARTUP_TIMEOUT_MS: "1200000"
-        run: npm run test:native:windows
+        run: |
+          npm run test:native:windows:full
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:persistence:windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   package-smoke:
     name: Package smoke (${{ matrix.target }})
