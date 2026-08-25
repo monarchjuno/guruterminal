@@ -221,8 +221,12 @@ try {
     // macOS may cap a native test window at the active display's work area.
     // Audit the actual CSS viewport instead of assuming WebDriver can exceed it.
     await browser.setWindowSize(1401, 700);
+    // On Windows, the WebDriver resize command resolves before WebView has
+    // applied its CSS viewport. Let the next paint settle before auditing.
+    await browser.pause(250);
     assertReadable(await auditAgentLayout());
     await browser.setWindowSize(1000, 700);
+    await browser.pause(250);
     assertReadable(await auditAgentLayout());
     await browser.setWindowSize(
       initialWindowSize.width,
