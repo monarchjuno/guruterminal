@@ -19,6 +19,15 @@ assert.match(appLauncher, /GURUTERMINAL_E2E_APP_DATA_DIR/);
 assert.doesNotMatch(appLauncher, /GURUTERMINAL_E2E_APPROVE_NATIVE/);
 assert.doesNotMatch(appLauncher, /GURUTERMINAL_AGENT_E2E_KEYCHAIN/);
 
+const windowsSmokeLauncher = read(resolve(e2eRoot, "run-native-smoke.ps1"));
+assert.match(windowsSmokeLauncher, /ProcessStartInfo/);
+assert.match(windowsSmokeLauncher, /\.Environment\.Clear\(\)/);
+assert.match(windowsSmokeLauncher, /GURUTERMINAL_E2E_APP_DATA_DIR/);
+assert.match(windowsSmokeLauncher, /Get-NetTCPConnection/);
+assert.match(windowsSmokeLauncher, /Get-CimInstance/);
+assert.doesNotMatch(windowsSmokeLauncher, /GURUTERMINAL_E2E_APPROVE_NATIVE/);
+assert.doesNotMatch(windowsSmokeLauncher, /GURUTERMINAL_AGENT_E2E_KEYCHAIN/);
+
 const devLauncher = read(resolve(e2eRoot, "run-dev-app.sh"));
 assert.match(devLauncher, /\/usr\/bin\/env -i/);
 assert.doesNotMatch(devLauncher, /GURUTERMINAL_AGENT_E2E_KEYCHAIN/);
