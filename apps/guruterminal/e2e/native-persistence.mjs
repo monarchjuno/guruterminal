@@ -20,6 +20,7 @@ const artifactRoot = resolve(e2eRoot, "artifacts");
 await mkdir(artifactRoot, { recursive: true });
 
 const {
+  bodyText,
   childWithText,
   displayed,
   clickButton,
@@ -128,61 +129,28 @@ async function selectImportedAgent() {
   );
 }
 
-async function assertImportedMemory(records = IMPORTED_RECORDS) {
-  await navigateTo("Memory");
-  const library = await displayed("#main-panel-library");
-  await waitForText(library, `${records.length} pages.`);
-  for (const record of records) await waitForText(library, record.title);
-
-  const search = await displayed('input[placeholder="Search memory"]');
-  for (const record of records) {
-    const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
-    await kindFilter.click();
+async function waitForLibraryIdle(library, timeout = 10_000) {
+  const workspace = await displayed("#main-panel-library .library-page", timeout);
+  try {
     await browser.waitUntil(
-      async () => (await kindFilter.getAttribute("aria-pressed")) === "true",
+      async () =>
+        (await workspace.isDisplayed()) &&
+        (await workspace.getAttribute("aria-busy")) === "false",
       {
-        timeout: 10_000,
+        timeout,
         interval: 100,
-        timeoutMsg: `${record.kind} filter was not selected`,
+        timeoutMsg: "Memory workspace did not become idle",
       },
     );
-    await search.setValue(record.query);
-    const selector = `button[aria-label^="Open ${record.title} ("]`;
-    await browser.waitUntil(
-      async () => {
-        const labels = [];
-        for (const button of await library.$$("button[data-library-result]")) {
-          if (await button.isDisplayed()) {
-            labels.push(await button.getAttribute("aria-label"));
-          }
-        }
-        return labels.length === 1 && labels[0]?.startsWith(`Open ${record.title} (`);
-      },
-      {
-        timeout: 10_000,
-        interval: 100,
-        timeoutMsg: `Search did not return only ${record.title}`,
-      },
+  } catch (cause) {
+    throw new Error(
+      `Memory workspace did not become idle\n${await bodyText()}`,
+      { cause },
     );
-    const result = await displayed(selector);
-    await result.click();
-    await waitForText(library, record.detail);
-    assert.equal(await result.getAttribute("aria-current"), "page");
   }
-  await search.setValue("");
-  await clickButton("All types", library);
-  await waitForText(library, `${records.length} pages.`);
 }
 
-async function openImportedMemory(record) {
-  await navigateTo("Memory");
-  const library = await displayed("#main-panel-library");
-  const search = await displayed('input[placeholder="Search memory"]');
-  const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
-  if ((await kindFilter.getAttribute("aria-pressed")) !== "true") {
-    await kindFilter.click();
-  }
-  await search.setValue(record.query);
+async function waitForImportedMemorySelection(library, record) {
   const selector = `button[aria-label^="Open ${record.title} ("]`;
   await browser.waitUntil(
     async () => {
@@ -200,8 +168,79 @@ async function openImportedMemory(record) {
       timeoutMsg: `Search did not return only ${record.title}`,
     },
   );
-  await (await displayed(selector)).click();
+  const result = await displayed(selector);
+  // LibraryView automatically opens its sole search result. Waiting for that
+  // transition avoids starting a second overlapping read by clicking it again.
   await waitForText(library, record.detail);
+  await waitForLibraryIdle(library);
+  assert.equal(await result.getAttribute("aria-current"), "page");
+}
+
+async function waitForMemoryEditorToClose(timeout = MEMORY_WRITE_TIMEOUT_MS) {
+  try {
+    await browser.waitUntil(
+      async () => {
+        for (const editor of await browser.$$('[aria-label="Edit memory"]')) {
+          if (await editor.isDisplayed()) return false;
+        }
+        return true;
+      },
+      {
+        timeout,
+        interval: 100,
+        timeoutMsg: "Memory editor did not close after save",
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `Memory editor did not close after save\n${await bodyText()}`,
+      { cause },
+    );
+  }
+}
+
+async function assertImportedMemory(records = IMPORTED_RECORDS) {
+  await navigateTo("Memory");
+  const library = await displayed("#main-panel-library");
+  await waitForText(library, `${records.length} pages.`);
+  for (const record of records) await waitForText(library, record.title);
+  await waitForLibraryIdle(library);
+
+  const search = await displayed('input[placeholder="Search memory"]');
+  for (const record of records) {
+    const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
+    await kindFilter.click();
+    await browser.waitUntil(
+      async () => (await kindFilter.getAttribute("aria-pressed")) === "true",
+      {
+        timeout: 10_000,
+        interval: 100,
+        timeoutMsg: `${record.kind} filter was not selected`,
+      },
+    );
+    await waitForLibraryIdle(library);
+    await search.setValue(record.query);
+    await waitForImportedMemorySelection(library, record);
+  }
+  await search.setValue("");
+  await waitForLibraryIdle(library);
+  await clickButton("All types", library);
+  await waitForText(library, `${records.length} pages.`);
+  await waitForLibraryIdle(library);
+}
+
+async function openImportedMemory(record) {
+  await navigateTo("Memory");
+  const library = await displayed("#main-panel-library");
+  await waitForLibraryIdle(library);
+  const search = await displayed('input[placeholder="Search memory"]');
+  const kindFilter = await displayed(`button[aria-label="${record.kind}"]`);
+  if ((await kindFilter.getAttribute("aria-pressed")) !== "true") {
+    await kindFilter.click();
+    await waitForLibraryIdle(library);
+  }
+  await search.setValue(record.query);
+  await waitForImportedMemorySelection(library, record);
   return library;
 }
 
@@ -220,10 +259,23 @@ async function editAndRevertImportedWiki() {
   const library = await openImportedMemory(IMPORTED_WIKI);
   await clickButton("Edit", library);
   const editor = await displayed('[aria-label="Edit memory"]');
+  // Entering edit mode refreshes LibraryView's search. Let that reader drain
+  // before starting the exclusive Memory write below.
+  await waitForLibraryIdle(library);
   const body = await displayed("textarea.memory-markdown-editor");
   assert.equal(await body.getValue(), IMPORTED_WIKI_BODY);
   await body.setValue(`${IMPORTED_WIKI_BODY}\n\n${IMPORTED_WIKI_EDIT_MARKER}`);
-  await clickButton("Save memory", editor);
+  const expectedBody = `${IMPORTED_WIKI_BODY}\n\n${IMPORTED_WIKI_EDIT_MARKER}`;
+  await browser.waitUntil(async () => (await body.getValue()) === expectedBody, {
+    timeout: 10_000,
+    interval: 100,
+    timeoutMsg: "Wiki editor did not retain the revised body",
+  });
+  const save = await childWithText(editor, "button", "Save memory");
+  await save.waitForEnabled({ timeout: 10_000 });
+  await save.click();
+  await waitForMemoryEditorToClose();
+  await waitForLibraryIdle(library, MEMORY_WRITE_TIMEOUT_MS);
   await childWithText(library, "button", "Revert", MEMORY_WRITE_TIMEOUT_MS);
   await waitForText(library, IMPORTED_WIKI_EDIT_MARKER, MEMORY_WRITE_TIMEOUT_MS);
   await clickButton("Revert", library);
