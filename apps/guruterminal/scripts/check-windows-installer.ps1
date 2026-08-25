@@ -90,6 +90,38 @@ function Assert-SameFile([string]$Expected, [string]$Actual) {
     }
 }
 
+function Get-IsolatedInstallationCleanupState(
+    [string]$InstallRoot,
+    [string]$UninstallRegistryPath,
+    [string]$ProductRegistryPath
+) {
+    $remaining = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $InstallRoot) {
+        $remaining.Add("install root: $InstallRoot")
+        $installedItems = @(Get-ChildItem -LiteralPath $InstallRoot -Recurse -Force)
+        if ($installedItems.Count -ne 0) {
+            $sample = @(
+                $installedItems |
+                    Select-Object -First 20 |
+                    ForEach-Object { [IO.Path]::GetRelativePath($InstallRoot, $_.FullName) }
+            )
+            $suffix = if ($installedItems.Count -gt $sample.Count) {
+                " (and $($installedItems.Count - $sample.Count) more)"
+            } else {
+                ""
+            }
+            $remaining.Add("remaining install paths: $($sample -join ', ')$suffix")
+        }
+    }
+    if (Test-Path -LiteralPath $UninstallRegistryPath) {
+        $remaining.Add("uninstall registry: $UninstallRegistryPath")
+    }
+    if (Test-Path -LiteralPath $ProductRegistryPath) {
+        $remaining.Add("product registry: $ProductRegistryPath")
+    }
+    return $remaining
+}
+
 if (-not $IsWindows -or -not [Environment]::Is64BitOperatingSystem) {
     throw "Final NSIS package inspection requires 64-bit Windows."
 }
@@ -361,11 +393,14 @@ try {
                 Remove-Item -LiteralPath $publisherRegistryPath -Force
             }
         }
-        if ($installStarted -and
-            ((Test-Path -LiteralPath $installRoot) -or
-             (Test-Path -LiteralPath $uninstallRegistryPath) -or
-             (Test-Path -LiteralPath $productRegistryPath))) {
-            throw "Final package check did not remove the isolated installation."
+        if ($installStarted) {
+            $remaining = @(Get-IsolatedInstallationCleanupState `
+                $installRoot `
+                $uninstallRegistryPath `
+                $productRegistryPath)
+            if ($remaining.Count -ne 0) {
+                throw "Final package check did not remove the isolated installation. $($remaining -join '; ')"
+            }
         }
     } catch {
         $cleanupError = $_
