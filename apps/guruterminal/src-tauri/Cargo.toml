@@ -1,6 +1,6 @@
 [package]
 name = "guruterminal-desktop"
-version = "0.0.1"
+version = "0.0.1-rc.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Local native app for research with durable Guru Terminal memory"
