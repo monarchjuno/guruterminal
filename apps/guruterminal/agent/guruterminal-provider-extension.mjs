@@ -2,6 +2,7 @@ import {
   closeSync,
   constants,
   fstatSync,
+  ftruncateSync,
   fsyncSync,
   openSync,
   readFileSync,
@@ -24,7 +25,12 @@ import {
 const PROTOCOL = "guruterminal-provider/1";
 const MAX_RESULT_BYTES = 512 * 1024;
 const MAX_REQUEST_BYTES = 64 * 1024;
-const RESULT_OPEN_NOFOLLOW = process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
+const IS_WINDOWS = process.platform === "win32";
+// libuv rejects O_WRONLY | O_TRUNC on Windows, so truncate the validated
+// descriptor below instead of asking Windows to truncate during open.
+const RESULT_OPEN_FLAGS = IS_WINDOWS
+  ? constants.O_WRONLY
+  : constants.O_WRONLY | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
 const RESULT_FILE = process.env.GURUTERMINAL_PROVIDER_RESULT_FILE;
 const REQUEST_FILE = process.env.GURUTERMINAL_PROVIDER_REQUEST_FILE;
 const PROVIDER_API_KEY = process.env.GURUTERMINAL_PROVIDER_API_KEY;
@@ -53,12 +59,10 @@ function writeResult(value) {
 
   let descriptor;
   try {
-    descriptor = openSync(
-      RESULT_FILE,
-      constants.O_WRONLY | constants.O_TRUNC | RESULT_OPEN_NOFOLLOW,
-    );
+    descriptor = openSync(RESULT_FILE, RESULT_OPEN_FLAGS);
     const metadata = fstatSync(descriptor);
     if (!metadata.isFile()) throw new Error("Guru Terminal provider result file is invalid");
+    if (IS_WINDOWS) ftruncateSync(descriptor, 0);
     writeExactSync(descriptor, encoded);
     fsyncSync(descriptor);
   } finally {
