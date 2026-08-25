@@ -1,4 +1,0 @@
-interface:
-  display_name: "Decision"
-  short_description: "Use when the user asks for an explicit investment judgment, recommendation, stance, or allocation choice rather than research alone."
-  default_prompt: "Use $decision to make one source-grounded investment judgment with uncertainty, counterevidence, risks, and invalidation conditions."

@@ -68,7 +68,7 @@ pub struct MarketplaceRuntimeDto {
 pub enum MarketplaceRuntimeKind {
     Native,
     LocalWorker,
-    #[serde(rename = "mcp", alias = "bundled_mcp")]
+    #[serde(rename = "mcp")]
     BundledMcp,
 }
 
