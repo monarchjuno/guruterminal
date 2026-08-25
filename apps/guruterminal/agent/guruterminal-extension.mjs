@@ -15,6 +15,7 @@ const MAX_HOST_CONTEXT_BYTES = 64 * 1024;
 const MAX_RUN_OPTIONS_BYTES = 4 * 1024;
 const MAX_MCP_TOOLS = 512;
 const MAX_MCP_SCHEMA_BYTES = 64 * 1024;
+const HOST_CONTEXT_OPEN_NOFOLLOW = process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
 const MEMORY_KIND_SLUGS = Object.freeze(["wiki", "lens", "evidence", "decision"]);
 const CHAT_LEARNING_KIND_SLUGS = Object.freeze(["wiki", "lens"]);
 const TOOL_NAMES = new Set([
@@ -334,7 +335,7 @@ function loadHostContext() {
 
   let descriptor;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    descriptor = openSync(path, constants.O_RDONLY | HOST_CONTEXT_OPEN_NOFOLLOW);
     const metadata = fstatSync(descriptor);
     if (!metadata.isFile() || metadata.size <= 0 || metadata.size > MAX_HOST_CONTEXT_BYTES) {
       throw new Error("Guru Terminal host context is invalid");

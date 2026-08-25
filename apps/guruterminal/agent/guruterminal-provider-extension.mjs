@@ -24,6 +24,7 @@ import {
 const PROTOCOL = "guruterminal-provider/1";
 const MAX_RESULT_BYTES = 512 * 1024;
 const MAX_REQUEST_BYTES = 64 * 1024;
+const RESULT_OPEN_NOFOLLOW = process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
 const RESULT_FILE = process.env.GURUTERMINAL_PROVIDER_RESULT_FILE;
 const REQUEST_FILE = process.env.GURUTERMINAL_PROVIDER_REQUEST_FILE;
 const PROVIDER_API_KEY = process.env.GURUTERMINAL_PROVIDER_API_KEY;
@@ -54,7 +55,7 @@ function writeResult(value) {
   try {
     descriptor = openSync(
       RESULT_FILE,
-      constants.O_WRONLY | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0),
+      constants.O_WRONLY | constants.O_TRUNC | RESULT_OPEN_NOFOLLOW,
     );
     const metadata = fstatSync(descriptor);
     if (!metadata.isFile()) throw new Error("Guru Terminal provider result file is invalid");
