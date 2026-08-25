@@ -192,6 +192,10 @@ def current_version(root: Path) -> str:
             root / "apps/guruterminal/src-tauri/Cargo.lock",
             "guruterminal-desktop",
         ),
+        "desktop embedded core lockfile": cargo_lock_version(
+            root / "apps/guruterminal/src-tauri/Cargo.lock",
+            "guruterminal-core",
+        ),
         "Tauri configuration": package_json_version(
             root / "apps/guruterminal/src-tauri/tauri.conf.json"
         ),
@@ -216,10 +220,10 @@ def rewritten_documents(root: Path, version: str) -> list[Document]:
         root / "apps/guruterminal/src-tauri/Cargo.toml",
     ]
     cargo_lock_paths = [
-        (root / "Cargo.lock", "guruterminal-core"),
+        (root / "Cargo.lock", ("guruterminal-core",)),
         (
             root / "apps/guruterminal/src-tauri/Cargo.lock",
-            "guruterminal-desktop",
+            ("guruterminal-desktop", "guruterminal-core"),
         ),
     ]
     json_paths = [
@@ -243,14 +247,16 @@ def rewritten_documents(root: Path, version: str) -> list[Document]:
                 ),
             )
         )
-    for path, package_name in cargo_lock_paths:
+    for path, package_names in cargo_lock_paths:
         contents = read_text(path)
+        for package_name in package_names:
+            contents = replace_exactly_once(
+                contents, cargo_lock_version_pattern(package_name), version, path
+            )
         documents.append(
             Document(
                 path,
-                replace_exactly_once(
-                    contents, cargo_lock_version_pattern(package_name), version, path
-                ),
+                contents,
             )
         )
     for path in json_paths:

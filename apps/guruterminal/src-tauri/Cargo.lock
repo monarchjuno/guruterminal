@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "guruterminal-core"
-version = "0.0.1"
+version = "0.0.1-rc.1"
 dependencies = [
  "chrono",
  "model2vec-rs",
