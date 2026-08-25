@@ -782,6 +782,321 @@ const CHAT_CONTROL_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
 // not normal model thinking. Never replay the prompt here: a hidden tool call
 // could otherwise be duplicated.
 const CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
+// Match Pi's `httpIdleTimeoutMs: 300000` transport limit. This caps the whole
+// pre-body phase: compaction is Pi system work, not provider body progress,
+// but neither an unended compaction nor serial compactions may hold a run
+// forever.
+const CHAT_PRE_BODY_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+// At an expired watchdog boundary, Pi can have a short protocol prelude queued
+// before `compaction_start`. Give that queued work a fixed, small chance to be
+// observed without letting a stream of unrelated events starve the timeout.
+const CHAT_WATCHDOG_EXPIRY_EVENT_DEFERRAL_LIMIT: usize = 8;
+
+fn watchdog_expiry_event_deferral_allowed(expiry_event_deferrals: usize) -> bool {
+    expiry_event_deferrals < CHAT_WATCHDOG_EXPIRY_EVENT_DEFERRAL_LIMIT
+}
+
+type PiEventReceive = Result<PiEvent, tokio::sync::broadcast::error::RecvError>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FirstProviderBodyWatchdogSelectMode {
+    Fair,
+    PrioritizeQueuedPiEvent,
+    Timeout,
+}
+
+enum ChatLoopInput {
+    WatchdogElapsed,
+    CancelChanged(Result<(), tokio::sync::watch::error::RecvError>),
+    Control(Option<ChatControlRequest>),
+    PiEvent(PiEventReceive),
+}
+
+fn take_queued_pi_event_after_watchdog_expiry(
+    pi_events: &mut tokio::sync::broadcast::Receiver<PiEvent>,
+    expiry_event_deferrals: &mut usize,
+) -> Option<PiEventReceive> {
+    if !watchdog_expiry_event_deferral_allowed(*expiry_event_deferrals) {
+        return None;
+    }
+    let event = match pi_events.try_recv() {
+        Ok(event) => Some(Ok(event)),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(skipped)) => Some(Err(
+            tokio::sync::broadcast::error::RecvError::Lagged(skipped),
+        )),
+        Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+            Some(Err(tokio::sync::broadcast::error::RecvError::Closed))
+        }
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty) => None,
+    };
+    if event.is_some() {
+        *expiry_event_deferrals += 1;
+    }
+    event
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FirstProviderBodyWatchdog {
+    AwaitingProviderBody {
+        body_deadline: Instant,
+        pre_body_deadline: Instant,
+    },
+    Compacting {
+        pre_body_deadline: Instant,
+    },
+    Satisfied,
+}
+
+impl FirstProviderBodyWatchdog {
+    fn new(now: Instant) -> Self {
+        let pre_body_deadline = now + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+        Self::AwaitingProviderBody {
+            body_deadline: now + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT,
+            pre_body_deadline,
+        }
+    }
+
+    fn deadline(self) -> Option<Instant> {
+        match self {
+            Self::AwaitingProviderBody {
+                body_deadline,
+                pre_body_deadline,
+            } => Some(body_deadline.min(pre_body_deadline)),
+            Self::Compacting { pre_body_deadline } => Some(pre_body_deadline),
+            Self::Satisfied => None,
+        }
+    }
+
+    fn is_active(self) -> bool {
+        self.deadline().is_some()
+    }
+
+    fn is_expired(self, now: Instant) -> bool {
+        self.deadline().is_some_and(|deadline| now >= deadline)
+    }
+
+    fn select_mode(
+        self,
+        now: Instant,
+        expiry_event_deferrals: usize,
+    ) -> FirstProviderBodyWatchdogSelectMode {
+        if !self.is_expired(now) {
+            FirstProviderBodyWatchdogSelectMode::Fair
+        } else if watchdog_expiry_event_deferral_allowed(expiry_event_deferrals) {
+            FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent
+        } else {
+            FirstProviderBodyWatchdogSelectMode::Timeout
+        }
+    }
+
+    fn timeout_failure(self) -> &'static str {
+        match self {
+            Self::Compacting { .. } => "Pi did not finish pre-body compaction",
+            Self::AwaitingProviderBody { .. } | Self::Satisfied => {
+                "Pi did not emit provider body progress"
+            }
+        }
+    }
+
+    fn observe_provider_body_progress(&mut self) {
+        *self = Self::Satisfied;
+    }
+
+    /// Returns a replacement deadline only for a compaction that begins
+    /// before any provider body progress. Duplicate starts deliberately keep
+    /// the original compaction deadline bounded.
+    fn observe_compaction_start(&mut self) -> Option<Instant> {
+        match self {
+            Self::AwaitingProviderBody {
+                pre_body_deadline, ..
+            } => {
+                let deadline = *pre_body_deadline;
+                *self = Self::Compacting {
+                    pre_body_deadline: deadline,
+                };
+                Some(deadline)
+            }
+            Self::Compacting { .. } | Self::Satisfied => None,
+        }
+    }
+
+    /// Returns a fresh provider-body deadline only when ending the active
+    /// pre-body compaction. An unmatched end event must not indefinitely reset
+    /// the watchdog.
+    fn observe_compaction_end(&mut self, now: Instant) -> Option<Instant> {
+        match self {
+            Self::Compacting { pre_body_deadline } => {
+                let pre_body_deadline = *pre_body_deadline;
+                let deadline =
+                    (now + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT).min(pre_body_deadline);
+                *self = Self::AwaitingProviderBody {
+                    body_deadline: now + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT,
+                    pre_body_deadline,
+                };
+                Some(deadline)
+            }
+            Self::AwaitingProviderBody { .. } | Self::Satisfied => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod first_provider_body_watchdog_tests {
+    use super::*;
+
+    #[test]
+    fn pre_body_compaction_replaces_the_body_deadline_and_resumes_it_after_end() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let pre_body_deadline = started + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+        assert_eq!(
+            watchdog.deadline(),
+            Some(started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT)
+        );
+
+        let compaction_started = started + Duration::from_secs(59);
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(watchdog.deadline(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.timeout_failure(),
+            "Pi did not finish pre-body compaction"
+        );
+
+        let compaction_ended = compaction_started + Duration::from_secs(61);
+        assert_eq!(
+            watchdog.observe_compaction_end(compaction_ended),
+            Some(compaction_ended + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT)
+        );
+        assert_eq!(
+            watchdog.deadline(),
+            Some(compaction_ended + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT)
+        );
+        assert_eq!(
+            watchdog.timeout_failure(),
+            "Pi did not emit provider body progress"
+        );
+    }
+
+    #[test]
+    fn unended_pre_body_compaction_keeps_its_original_bounded_deadline() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let deadline = started + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+
+        assert_eq!(watchdog.observe_compaction_start(), Some(deadline));
+        assert_eq!(watchdog.observe_compaction_start(), None);
+        assert_eq!(watchdog.deadline(), Some(deadline));
+        assert!(watchdog.is_active());
+        assert_eq!(
+            watchdog.timeout_failure(),
+            "Pi did not finish pre-body compaction"
+        );
+    }
+
+    #[test]
+    fn queued_compaction_at_the_body_deadline_is_observed_before_timeout() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let body_deadline = started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
+        let pre_body_deadline = started + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+
+        assert_eq!(
+            watchdog.select_mode(body_deadline, 0),
+            FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent
+        );
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.select_mode(body_deadline, 0),
+            FirstProviderBodyWatchdogSelectMode::Fair
+        );
+    }
+
+    #[test]
+    fn queued_events_at_expiry_have_a_fixed_deferral_limit() {
+        let started = Instant::now();
+        let watchdog = FirstProviderBodyWatchdog::new(started);
+        let body_deadline = started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
+
+        for deferrals in 0..CHAT_WATCHDOG_EXPIRY_EVENT_DEFERRAL_LIMIT {
+            assert_eq!(
+                watchdog.select_mode(body_deadline, deferrals),
+                FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent,
+                "deferral {deferrals} should admit one queued Pi event"
+            );
+        }
+        assert_eq!(
+            watchdog.select_mode(body_deadline, CHAT_WATCHDOG_EXPIRY_EVENT_DEFERRAL_LIMIT,),
+            FirstProviderBodyWatchdogSelectMode::Timeout,
+            "an event flood must not postpone an expired watchdog forever"
+        );
+    }
+
+    #[test]
+    fn normal_streaming_uses_fair_select_so_steer_cannot_be_starved_by_pi_events() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let body_deadline = started + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
+
+        assert_eq!(
+            watchdog.select_mode(body_deadline - Duration::from_millis(1), 0),
+            FirstProviderBodyWatchdogSelectMode::Fair,
+            "before expiry the runtime polls control and Pi events through the fair select"
+        );
+        watchdog.observe_provider_body_progress();
+        assert_eq!(
+            watchdog.select_mode(body_deadline, 0),
+            FirstProviderBodyWatchdogSelectMode::Fair,
+            "after body progress, chat steers remain on the fair streaming path"
+        );
+    }
+
+    #[test]
+    fn serial_pre_body_compactions_never_extend_the_total_pre_body_deadline() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        let pre_body_deadline = started + CHAT_PRE_BODY_TOTAL_TIMEOUT;
+
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.observe_compaction_end(started + Duration::from_secs(100)),
+            Some(started + Duration::from_secs(160))
+        );
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.observe_compaction_end(started + Duration::from_secs(250)),
+            Some(pre_body_deadline),
+            "a fresh body window may not extend the fixed Pi idle deadline"
+        );
+        assert_eq!(watchdog.observe_compaction_start(), Some(pre_body_deadline));
+        assert_eq!(
+            watchdog.observe_compaction_end(started + Duration::from_secs(290)),
+            Some(pre_body_deadline)
+        );
+        assert_eq!(watchdog.deadline(), Some(pre_body_deadline));
+    }
+
+    #[test]
+    fn provider_body_progress_permanently_satisfies_the_watchdog() {
+        let started = Instant::now();
+        let mut watchdog = FirstProviderBodyWatchdog::new(started);
+        assert_eq!(
+            watchdog.observe_compaction_end(started + Duration::from_secs(1)),
+            None,
+            "an unmatched compaction end must not reset the body deadline"
+        );
+
+        assert!(watchdog.observe_compaction_start().is_some());
+        watchdog.observe_provider_body_progress();
+        assert!(!watchdog.is_active());
+        assert_eq!(watchdog.deadline(), None);
+        assert_eq!(watchdog.observe_compaction_start(), None);
+        assert_eq!(
+            watchdog.observe_compaction_end(started + Duration::from_secs(4)),
+            None
+        );
+        assert_eq!(watchdog.deadline(), None);
+    }
+}
 
 #[derive(Clone, Copy)]
 enum ChatTerminalStatus {
@@ -1753,6 +2068,7 @@ pub async fn chat_send(
             ));
         }
     };
+    let first_provider_body_watchdog_started_at = Instant::now();
     if *cancel.borrow() {
         let _ = pi.abort().await;
         let pi_stopped = pi.shutdown(Duration::from_secs(1)).await.is_ok();
@@ -1788,8 +2104,6 @@ pub async fn chat_send(
     } else {
         &prompt
     });
-    let first_provider_body_progress_deadline =
-        Instant::now() + CHAT_FIRST_PROVIDER_BODY_PROGRESS_TIMEOUT;
     tauri::async_runtime::spawn(async move {
         let mut content = String::new();
         let mut assistant_capture = AssistantTurnCapture::default();
@@ -1802,24 +2116,80 @@ pub async fn chat_send(
         let mut next_control_sequence = 0_u64;
         let mut next_control_to_persist = 0_u64;
         let mut progress = ChatProgressProjection::new(now_ms());
-        let first_provider_body_progress_timer =
-            tokio::time::sleep_until(first_provider_body_progress_deadline);
+        let mut first_provider_body_watchdog =
+            FirstProviderBodyWatchdog::new(first_provider_body_watchdog_started_at);
+        let first_provider_body_progress_timer = tokio::time::sleep_until(
+            first_provider_body_watchdog
+                .deadline()
+                .expect("new first-provider-body watchdog has a deadline"),
+        );
         tokio::pin!(first_provider_body_progress_timer);
-        let mut saw_first_provider_body_progress = false;
+        let mut watchdog_expiry_event_deferrals = 0_usize;
         loop {
-            tokio::select! {
-                _ = &mut first_provider_body_progress_timer, if !saw_first_provider_body_progress => {
-                    failure = Some("Pi did not emit provider body progress".into());
-                    break;
+            let select_mode = first_provider_body_watchdog
+                .select_mode(Instant::now(), watchdog_expiry_event_deferrals);
+            if select_mode == FirstProviderBodyWatchdogSelectMode::Timeout {
+                if *cancel.borrow() || cancel.has_changed().is_err() {
+                    aborted = true;
+                    let _ = pi.abort().await;
+                } else {
+                    failure = Some(first_provider_body_watchdog.timeout_failure().into());
                 }
-                changed = cancel.changed() => {
+                break;
+            }
+            let input = match select_mode {
+                FirstProviderBodyWatchdogSelectMode::Fair => {
+                    // Keep Tokio's default fair branch polling while streaming:
+                    // a busy Pi event stream must not starve a queued steer.
+                    tokio::select! {
+                        _ = &mut first_provider_body_progress_timer, if first_provider_body_watchdog.is_active() => ChatLoopInput::WatchdogElapsed,
+                        changed = cancel.changed() => ChatLoopInput::CancelChanged(changed),
+                        control = chat_controls.recv() => ChatLoopInput::Control(control),
+                        event = pi_events.recv() => ChatLoopInput::PiEvent(event),
+                    }
+                }
+                FirstProviderBodyWatchdogSelectMode::PrioritizeQueuedPiEvent => {
+                    // Only at an expired watchdog boundary, Pi may already have
+                    // queued `compaction_start`. Prefer that bounded protocol
+                    // work before failing; normal streaming stays fair above.
+                    tokio::select! {
+                        biased;
+                        changed = cancel.changed() => ChatLoopInput::CancelChanged(changed),
+                        event = pi_events.recv() => {
+                            watchdog_expiry_event_deferrals += 1;
+                            ChatLoopInput::PiEvent(event)
+                        },
+                        _ = &mut first_provider_body_progress_timer, if first_provider_body_watchdog.is_active() => ChatLoopInput::WatchdogElapsed,
+                        control = chat_controls.recv() => ChatLoopInput::Control(control),
+                    }
+                }
+                FirstProviderBodyWatchdogSelectMode::Timeout => {
+                    unreachable!("handled before select")
+                }
+            };
+            let input = match input {
+                ChatLoopInput::WatchdogElapsed => {
+                    let Some(event) = take_queued_pi_event_after_watchdog_expiry(
+                        &mut pi_events,
+                        &mut watchdog_expiry_event_deferrals,
+                    ) else {
+                        failure = Some(first_provider_body_watchdog.timeout_failure().into());
+                        break;
+                    };
+                    ChatLoopInput::PiEvent(event)
+                }
+                input => input,
+            };
+            match input {
+                ChatLoopInput::CancelChanged(changed) => {
                     if changed.is_err() || *cancel.borrow() {
                         aborted = true;
                         let _ = pi.abort().await;
                         break;
                     }
+                    continue;
                 }
-                control = chat_controls.recv() => {
+                ChatLoopInput::Control(control) => {
                     let Some(control) = control else {
                         continue;
                     };
@@ -1834,16 +2204,20 @@ pub async fn chat_send(
                             "Pi did not accept the queued instruction".into(),
                         ))),
                     }
+                    continue;
                 }
-                event = pi_events.recv() => {
+                ChatLoopInput::PiEvent(event) => {
                     if pi_event_indicates_first_provider_body_progress(&event) {
-                        saw_first_provider_body_progress = true;
+                        first_provider_body_watchdog.observe_provider_body_progress();
+                        watchdog_expiry_event_deferrals = 0;
                     }
                     match event {
                         Ok(PiEvent::Rpc { payload }) => {
                             match payload.get("type").and_then(Value::as_str) {
                                 Some("message_start") => {
-                                    if let Err(message) = assistant_capture.observe_message_start(&payload) {
+                                    if let Err(message) =
+                                        assistant_capture.observe_message_start(&payload)
+                                    {
                                         failure = Some(message.into());
                                         let _ = pi.abort().await;
                                         break;
@@ -1894,19 +2268,30 @@ pub async fn chat_send(
                                     }
                                 }
                                 Some("tool_execution_end") => {
-                                    if let Some(tool_call_id) = payload
-                                        .get("toolCallId")
-                                        .and_then(Value::as_str)
+                                    if let Some(tool_call_id) =
+                                        payload.get("toolCallId").and_then(Value::as_str)
                                     {
                                         progress.finish_tool(
                                             tool_call_id,
-                                            payload.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                                            payload
+                                                .get("isError")
+                                                .and_then(Value::as_bool)
+                                                .unwrap_or(false),
                                             now_ms(),
                                         );
                                         emit_chat_progress(&on_event, &task_run_id, &progress);
                                     }
                                 }
                                 Some("compaction_start") => {
+                                    if let Some(deadline) =
+                                        first_provider_body_watchdog.observe_compaction_start()
+                                    {
+                                        let now = Instant::now();
+                                        first_provider_body_progress_timer.as_mut().reset(deadline);
+                                        if deadline > now {
+                                            watchdog_expiry_event_deferrals = 0;
+                                        }
+                                    }
                                     progress.start_system(
                                         "compaction",
                                         ChatProgressOperation::Compact,
@@ -1917,6 +2302,15 @@ pub async fn chat_send(
                                     emit_chat_progress(&on_event, &task_run_id, &progress);
                                 }
                                 Some("compaction_end") => {
+                                    let now = Instant::now();
+                                    if let Some(deadline) =
+                                        first_provider_body_watchdog.observe_compaction_end(now)
+                                    {
+                                        first_provider_body_progress_timer.as_mut().reset(deadline);
+                                        if deadline > now {
+                                            watchdog_expiry_event_deferrals = 0;
+                                        }
+                                    }
                                     progress.finish_system(
                                         "compaction",
                                         compaction_end_failed(&payload),
@@ -1929,7 +2323,9 @@ pub async fn chat_send(
                                         payload.get("attempt").and_then(Value::as_u64),
                                         payload.get("maxAttempts").and_then(Value::as_u64),
                                     ) {
-                                        (Some(attempt), Some(max)) => Some(format!("attempt {attempt} of {max}")),
+                                        (Some(attempt), Some(max)) => {
+                                            Some(format!("attempt {attempt} of {max}"))
+                                        }
                                         (Some(attempt), None) => Some(format!("attempt {attempt}")),
                                         _ => None,
                                     };
@@ -1945,7 +2341,8 @@ pub async fn chat_send(
                                 Some("auto_retry_end") => {
                                     progress.finish_system(
                                         "retry",
-                                        payload.get("success").and_then(Value::as_bool) == Some(false),
+                                        payload.get("success").and_then(Value::as_bool)
+                                            == Some(false),
                                         now_ms(),
                                     );
                                     emit_chat_progress(&on_event, &task_run_id, &progress);
@@ -1963,14 +2360,21 @@ pub async fn chat_send(
                                                 .and_then(Value::as_str)
                                             {
                                                 if let Err(message) = assistant_capture
-                                                    .observe_text_delta(delta, MAX_CHAT_OUTPUT_BYTES)
+                                                    .observe_text_delta(
+                                                        delta,
+                                                        MAX_CHAT_OUTPUT_BYTES,
+                                                    )
                                                 {
                                                     failure = Some(message.into());
                                                     let _ = pi.abort().await;
                                                     break;
                                                 }
                                                 progress.append_commentary(delta);
-                                                emit_chat_progress(&on_event, &task_run_id, &progress);
+                                                emit_chat_progress(
+                                                    &on_event,
+                                                    &task_run_id,
+                                                    &progress,
+                                                );
                                             }
                                         }
                                         _ => {}
@@ -1998,7 +2402,11 @@ pub async fn chat_send(
                                             progress.finish_assistant_turn(false);
                                             emit_chat_progress(&on_event, &task_run_id, &progress);
                                         }
-                                        Ok(Some(AssistantTurnEnd::Length | AssistantTurnEnd::Error | AssistantTurnEnd::Aborted)) => {
+                                        Ok(Some(
+                                            AssistantTurnEnd::Length
+                                            | AssistantTurnEnd::Error
+                                            | AssistantTurnEnd::Aborted,
+                                        )) => {
                                             progress.finish_assistant_turn(false);
                                         }
                                         Ok(None) => {}
@@ -2052,12 +2460,15 @@ pub async fn chat_send(
                                     break;
                                 }
                                 Some("response") => {
-                                    if let Some(request_id) = payload.get("id").and_then(Value::as_u64) {
+                                    if let Some(request_id) =
+                                        payload.get("id").and_then(Value::as_u64)
+                                    {
                                         if record_chat_control_response(
                                             &mut pending_controls,
                                             &mut settled_controls,
                                             request_id,
-                                            payload.get("success").and_then(Value::as_bool) == Some(true),
+                                            payload.get("success").and_then(Value::as_bool)
+                                                == Some(true),
                                         ) {
                                             if let Err(error) = persist_contiguous_chat_controls(
                                                 app_state.store.as_ref(),
@@ -2071,7 +2482,8 @@ pub async fn chat_send(
                                                 break;
                                             }
                                         } else if request_id == prompt_request_id
-                                            && payload.get("success").and_then(Value::as_bool) == Some(false)
+                                            && payload.get("success").and_then(Value::as_bool)
+                                                == Some(false)
                                         {
                                             // A provider-controlled error may echo request or
                                             // authentication material. Keep it out of renderer
@@ -2109,6 +2521,7 @@ pub async fn chat_send(
                         }
                     }
                 }
+                ChatLoopInput::WatchdogElapsed => unreachable!("normalized before dispatch"),
             }
         }
 
