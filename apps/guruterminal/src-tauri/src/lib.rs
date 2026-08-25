@@ -64,6 +64,11 @@ pub(crate) const E2E_APP_IDENTIFIER: &str = "com.monarchjuno.guruterminal.e2e";
 pub fn run() {
     let context = tauri::generate_context!();
     let builder = tauri::Builder::default();
+    // `main` starts the Windows UI on an explicitly sized worker thread so
+    // debug startup has enough stack. Opt Tauri's event loop into that
+    // supported execution mode before constructing windows or plugins.
+    #[cfg(windows)]
+    let builder = builder.any_thread();
     #[cfg(any(target_os = "macos", windows))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         use tauri::Manager;
