@@ -28,10 +28,9 @@ use crate::process_lease::{
     ChildProcessLease, ProcessKind,
 };
 #[cfg(windows)]
-use crate::windows_fs::{
-    add_open_reparse_point_flag, metadata_is_reparse, open_directory_no_reparse,
-    open_regular_no_reparse,
-};
+use crate::windows_fs::add_open_reparse_point_flag;
+#[cfg(all(windows, not(debug_assertions)))]
+use crate::windows_fs::{metadata_is_reparse, open_directory_no_reparse, open_regular_no_reparse};
 use crate::{
     agent_harness,
     artifact_trust::{
