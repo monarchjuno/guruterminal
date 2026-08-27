@@ -140,9 +140,9 @@ impl ChatDecision {
             "invalidation_conditions",
         ];
         if required.iter().any(|key| !object.contains_key(*key))
-            || object.keys().any(|key| {
-                !required.contains(&key.as_str()) && key != "title" && key != "summary"
-            })
+            || object
+                .keys()
+                .any(|key| !required.contains(&key.as_str()) && key != "title" && key != "summary")
             || !object
                 .get("stance")
                 .and_then(Value::as_str)

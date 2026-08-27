@@ -398,7 +398,10 @@ fn evidence_source_line(citation: &tool_executor::EvidenceCitation) -> String {
     if citation.note.is_none() && receipt.origin.is_none() {
         format!("- {via}, retrieved {retrieved}")
     } else {
-        format!("- {} — {via}, retrieved {retrieved}", markdown_inline(label))
+        format!(
+            "- {} — {via}, retrieved {retrieved}",
+            markdown_inline(label)
+        )
     }
 }
 
@@ -877,9 +880,7 @@ mod tests {
 
     #[test]
     fn evidence_contains_readable_body_and_sources() {
-        let evidence = staged_evidence(
-            "3nm utilization rose to 91% on CoWoS tightness.",
-        );
+        let evidence = staged_evidence("3nm utilization rose to 91% on CoWoS tightness.");
         let markdown = evidence_markdown(&evidence, 0);
         let frontmatter = markdown
             .strip_prefix("---\n")
@@ -894,7 +895,9 @@ mod tests {
         assert!(frontmatter.contains("ticker:TSM"));
         assert!(markdown.contains("3nm utilization rose to 91% on CoWoS tightness."));
         assert!(markdown.contains("# Sources"));
-        assert!(markdown.contains("TSMC 3nm filing — web_fetch via example.test, retrieved 2026-08-13T15:30:00Z"));
+        assert!(markdown.contains(
+            "TSMC 3nm filing — web_fetch via example.test, retrieved 2026-08-13T15:30:00Z"
+        ));
         assert!(!markdown.contains("# Claims"));
         assert!(!markdown.contains("# Data"));
         assert!(!markdown.contains("result:one"));

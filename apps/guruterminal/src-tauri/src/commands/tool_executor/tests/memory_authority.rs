@@ -112,11 +112,7 @@ async fn decision_accepts_staged_evidence_and_rejects_raw_result_refs() {
     );
 
     let created = executor
-        .create_evidence(evidence(
-            "Exact value",
-            &result_ref,
-            "The value is 42.",
-        ))
+        .create_evidence(evidence("Exact value", &result_ref, "The value is 42."))
         .await
         .unwrap();
     executor
@@ -149,7 +145,10 @@ async fn evidence_create_keeps_receipts_without_result_payloads() {
     let staged = executor.capture.staged_evidence.lock().await;
     assert_eq!(staged[0].citations.len(), 1);
     assert_eq!(staged[0].citations[0].receipt.response_digest.len(), 64);
-    assert_eq!(staged[0].markdown, "The cited result supports a utilization of 42.");
+    assert_eq!(
+        staged[0].markdown,
+        "The cited result supports a utilization of 42."
+    );
     assert!(!staged[0].markdown.contains("xxxx"));
 }
 
@@ -195,11 +194,7 @@ async fn chat_update_accepts_staged_evidence_not_raw_results() {
         Err(BrokerError::Execution(_))
     ));
     let created = executor
-        .create_evidence(evidence(
-            "Exact claim",
-            &result_ref,
-            "The claim is exact.",
-        ))
+        .create_evidence(evidence("Exact claim", &result_ref, "The claim is exact."))
         .await
         .unwrap();
     let evidence_id = created["evidence_id"].as_str().unwrap().to_owned();
@@ -914,9 +909,18 @@ async fn evidence_create_accepts_readable_markdown_and_current_result_refs() {
             evidence[0].markdown,
             "3nm utilization rose on CoWoS tightness."
         );
-        assert_eq!(evidence[0].source.as_deref(), Some("https://example.test/tsmc"));
-        assert_eq!(evidence[0].citations[0].note.as_deref(), Some("TSMC commentary"));
-        assert_eq!(evidence[0].citations[0].receipt.origin.as_deref(), Some("test"));
+        assert_eq!(
+            evidence[0].source.as_deref(),
+            Some("https://example.test/tsmc")
+        );
+        assert_eq!(
+            evidence[0].citations[0].note.as_deref(),
+            Some("TSMC commentary")
+        );
+        assert_eq!(
+            evidence[0].citations[0].receipt.origin.as_deref(),
+            Some("test")
+        );
     }
 }
 
