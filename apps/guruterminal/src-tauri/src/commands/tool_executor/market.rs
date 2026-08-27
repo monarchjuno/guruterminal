@@ -219,6 +219,7 @@ pub(super) fn validate_decision_shape(params: &Value) -> Result<(), BrokerError>
     let object = exact_object(
         params,
         &[
+            "title",
             "stance",
             "horizon",
             "probability",
@@ -228,12 +229,25 @@ pub(super) fn validate_decision_shape(params: &Value) -> Result<(), BrokerError>
             "risks",
             "invalidation_conditions",
         ],
-        &[],
+        &["summary"],
     )?;
     if !object
-        .get("stance")
+        .get("title")
         .and_then(Value::as_str)
-        .is_some_and(|value| matches!(value, "positive" | "neutral" | "negative" | "abstain"))
+        .is_some_and(|value| {
+            let chars = value.chars().count();
+            chars >= 1 && chars <= 180 && !value.contains('\0')
+        })
+        || object.get("summary").is_some_and(|value| {
+            !value.as_str().is_some_and(|summary| {
+                let chars = summary.chars().count();
+                chars >= 1 && chars <= 400 && !summary.contains('\0')
+            })
+        })
+        || !object
+            .get("stance")
+            .and_then(Value::as_str)
+            .is_some_and(|value| matches!(value, "positive" | "neutral" | "negative" | "abstain"))
         || !object
             .get("probability")
             .and_then(Value::as_f64)

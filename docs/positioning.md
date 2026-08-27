@@ -52,7 +52,7 @@ The canonical kinds are Wiki, Lens, Evidence, and Decision, and those names stay
 | --- | --- |
 | Wiki | What this Guru has learned about the world and can use again |
 | Lens | How this Guru invests, including lessons, limits, and what would prove it wrong |
-| Evidence | Dated claims from a research theme, each tied to the exact sourced data used |
+| Evidence | Dated observations from a research theme, each tied to the sources actually used |
 | Decision | A judgment the Guru can learn from without rewriting history |
 
 ## Voice

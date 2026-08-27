@@ -97,6 +97,38 @@ test("resolves only canonical or unambiguous non-MCP capability identifiers", ()
 
 const BUNDLED_COMPONENTS = [
   {
+    id: "guruterminal.workbench/authoring",
+    kind: "tool",
+    name: "Workbench authoring",
+    description: "Create or edit files in the bounded workbench.",
+    tool_names: ["write", "edit"],
+    provider_ids: [],
+  },
+  {
+    id: "guruterminal.artifacts/markdown-publishing",
+    kind: "tool",
+    name: "Markdown artifact publishing",
+    description: "Publish or revise a Markdown artifact.",
+    tool_names: ["artifact_publish"],
+    provider_ids: [],
+  },
+  {
+    id: "guruterminal.memory/evidence-and-decisions",
+    kind: "tool",
+    name: "Evidence and decisions",
+    description: "Create canonical Evidence or submit an explicit Decision.",
+    tool_names: ["evidence_create", "decision_submit"],
+    provider_ids: [],
+  },
+  {
+    id: "guruterminal.memory/learning",
+    kind: "tool",
+    name: "Memory learning",
+    description: "Propose a complete Wiki or Lens record when enabled.",
+    tool_names: ["memory_patch_propose"],
+    provider_ids: [],
+  },
+  {
     id: "guruterminal.charting/authoring",
     kind: "tool",
     name: "Chart authoring",
@@ -351,11 +383,10 @@ test("registers only the product allowlist and round-trips through the private b
     agent_runtime: runtimeContext(
       "chat",
       [
-        "read", "write", "edit", "ls", "find", "grep",
+        "read", "ls", "find", "grep",
         "run_results_list",
         "memory_search", "memory_read", "memory_previous", "capability_search", "capability_load",
-        "artifact_list", "artifact_read", "artifact_publish", "decision_submit",
-        "evidence_create", "memory_patch_propose",
+        "artifact_list", "artifact_read",
       ],
       BUNDLED_COMPONENTS,
     ).agent_runtime,
@@ -411,6 +442,31 @@ test("registers only the product allowlist and round-trips through the private b
   );
   assert(!activeToolSnapshots[0].includes("compute_run"));
   assert(activeToolSnapshots[0].includes("capability_search"));
+  for (const name of [
+    "write",
+    "edit",
+    "artifact_publish",
+    "decision_submit",
+    "evidence_create",
+    "memory_patch_propose",
+  ]) {
+    assert(!activeToolSnapshots[0].includes(name), `${name} must be deferred`);
+  }
+  const cardBytes = (tools) => Buffer.byteLength(JSON.stringify(
+    tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+  ));
+  const eagerTools = new Set(activeToolSnapshots[0]);
+  const eagerSchemaBytes = cardBytes(registered.filter((tool) => eagerTools.has(tool.name)));
+  const registeredSchemaBytes = cardBytes(registered);
+  assert(eagerSchemaBytes < registeredSchemaBytes);
+  assert(cardBytes(registered.filter((tool) => [
+    "write",
+    "edit",
+    "artifact_publish",
+    "decision_submit",
+    "evidence_create",
+    "memory_patch_propose",
+  ].includes(tool.name))) > 0);
 
   let resolveReceived;
   let rejectReceived;
@@ -503,13 +559,16 @@ test("registers only the product allowlist and round-trips through the private b
   assert.equal(webSearch.parameters.properties.provider, undefined);
   assert.match(marketData.description, /Order, correction, and cancellation operations are absent/);
   assert.match(compute.description, /no network, host files, environment, subprocess/);
-  assert.deepEqual(evidenceCreate.parameters.required, ["title", "summary", "as_of", "claims"]);
-  assert.equal(evidenceCreate.parameters.properties.claims.maxItems, 16);
-  assert.deepEqual(evidenceCreate.parameters.properties.claims.items.required, ["text", "citations"]);
-  assert.deepEqual(
-    evidenceCreate.parameters.properties.claims.items.properties.citations.items.required,
-    ["result_ref", "pointer"],
-  );
+  assert.deepEqual(evidenceCreate.parameters.required, [
+    "title",
+    "summary",
+    "as_of",
+    "markdown",
+    "citations",
+  ]);
+  assert.equal(evidenceCreate.parameters.properties.citations.maxItems, 16);
+  assert.deepEqual(evidenceCreate.parameters.properties.citations.items.required, ["result_ref"]);
+  assert.equal(evidenceCreate.parameters.properties.citations.items.properties.pointer, undefined);
   assert.equal(memoryProposal.parameters.properties.target_id.pattern, "^(?:wiki|lens):[^\\s]+$");
   assert.equal(chartPublish.parameters.properties.source_ref, undefined);
   assert.deepEqual(chartPublish.parameters.then.required, ["mode", "title", "dataset", "view"]);
@@ -565,7 +624,14 @@ test("registers only the product allowlist and round-trips through the private b
     "statsmodels",
     "scikit-learn",
   ]);
-  assert.deepEqual(calculate.parameters.properties.operation.enum, [
+  assert.deepEqual(calculate.parameters.required, ["operations"]);
+  assert.equal(calculate.parameters.properties.operations.minItems, 1);
+  assert.equal(calculate.parameters.properties.operations.maxItems, 64);
+  const calculateOperation = calculate.parameters.properties.operations.items;
+  assert.deepEqual(calculateOperation.required, ["id", "operation", "arguments"]);
+  assert.equal(calculateOperation.properties.id.minLength, 1);
+  assert.equal(calculateOperation.properties.id.maxLength, 64);
+  assert.deepEqual(calculateOperation.properties.operation.enum, [
     "compound_annual_growth_rate",
     "currency_convert",
     "discounted_cash_flow",
@@ -581,13 +647,16 @@ test("registers only the product allowlist and round-trips through the private b
     "weighted_average_cost_of_capital",
   ]);
   const calculateArguments = (operation) => {
-    const branch = calculate.parameters.allOf.find(
+    const branch = calculateOperation.allOf.find(
       (item) => item.if?.properties?.operation?.const === operation,
     );
     assert.ok(branch, `missing finance_calculate branch for ${operation}`);
     return branch.then.properties.arguments;
   };
-  assert.equal(calculate.parameters.allOf.length, calculate.parameters.properties.operation.enum.length);
+  assert.equal(
+    calculateOperation.allOf.length,
+    calculateOperation.properties.operation.enum.length,
+  );
   const percentageChange = calculateArguments("percentage_change");
   assert.equal(percentageChange.additionalProperties, false);
   assert.deepEqual(percentageChange.required, ["start", "end"]);
@@ -644,6 +713,45 @@ test("registers only the product allowlist and round-trips through the private b
 
   const capabilitySearch = registered.find((tool) => tool.name === "capability_search");
   const capabilityLoad = registered.find((tool) => tool.name === "capability_load");
+  assert.deepEqual(capabilitySearch.parameters.required, ["query"]);
+  assert.equal(capabilitySearch.parameters.properties.query.minLength, 1);
+  await assert.rejects(
+    () => capabilitySearch.execute("discover-empty", { query: "   " }),
+    /must not be empty/,
+  );
+  const publishing = await capabilitySearch.execute("discover-publishing", {
+    query: "publish",
+  });
+  assert.deepEqual(
+    publishing.details.components.map((component) => component.id),
+    [
+      "guruterminal.artifacts/markdown-publishing",
+      "guruterminal.charting/authoring",
+    ],
+  );
+  const workbench = await capabilitySearch.execute("discover-workbench", {
+    query: "workbench",
+  });
+  assert.deepEqual(workbench.details.components[0].tools.map((tool) => tool.name), [
+    "write",
+    "edit",
+  ]);
+  await capabilityLoad.execute("load-workbench", {
+    id: "guruterminal.workbench/authoring",
+  });
+  assert(activeToolSnapshots.at(-1).includes("write"));
+  assert(activeToolSnapshots.at(-1).includes("edit"));
+  assert(!activeToolSnapshots.at(-1).includes("evidence_create"));
+  await capabilityLoad.execute("load-evidence", {
+    id: "guruterminal.memory/evidence-and-decisions",
+  });
+  assert(activeToolSnapshots.at(-1).includes("evidence_create"));
+  assert(activeToolSnapshots.at(-1).includes("decision_submit"));
+  assert(!activeToolSnapshots.at(-1).includes("memory_patch_propose"));
+  await capabilityLoad.execute("load-learning", {
+    id: "guruterminal.memory/learning",
+  });
+  assert(activeToolSnapshots.at(-1).includes("memory_patch_propose"));
   const discovered = await capabilitySearch.execute("discover", { query: "python" });
   assert.deepEqual(discovered.details.components.map((component) => component.id), [
     "guruterminal.compute-python/python",

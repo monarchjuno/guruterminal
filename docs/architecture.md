@@ -39,12 +39,64 @@ process lifetime remain outside the sidecar under Rust authority.
 
 ## Chat
 
-Chat is the only model-consuming session. The SQLite transcript is the conversation record. Each turn starts one disposable Pi process. Pi JSONL is cache, not authority.
+Chat is the only model-consuming session. The SQLite transcript is the conversation record. Each turn starts one disposable Pi process. Pi JSONL is cache, not authority. Process reuse is deliberately not a latency shortcut: the broker token, Tool policy, credentials, host context, Skills, working directory, and session identity are fixed at launch for one turn. A future warm Pi pool requires an idle-deny broker with an attested activate/drain/deactivate boundary before it can preserve this isolation.
+
+The broker has the first pool prerequisite: a non-serializable process-lifetime
+identity can restart sequential turn brokers at the same private endpoint and
+token, while policy, executor, and transaction cardinality are rebuilt for
+every activation. Concurrent identity use and stale endpoints fail closed, and
+the identity remains leased until handlers drain and the endpoint disappears.
+Chat does not retain Pi yet; this boundary must be integrated with idle-state,
+session-cursor, Skill-lifetime, credential, and connector-authority attestation
+before any process enters a pool.
+
+### Latency boundaries
+
+The host performs one bounded `knowledge context` preflight per turn. That one
+catalog scan supplies validation, health, revision, learned-record metadata,
+and the charter instead of launching and scanning once for each field. Pi
+startup sends its independent control requests as one pipeline and validates
+the complete response set under one deadline. The app-owned Pi transport uses
+automatic provider transport selection; only the exact previous app-owned
+settings file is upgraded.
+
+Provider text is provisional until Pi closes the assistant turn. Rust emits
+draft start/delta/end events while the model is writing, but sends canonical
+answer text only after the turn capture validates the matching message end.
+The React transport coalesces adjacent draft deltas to a 32 ms render cadence.
+Progress starts from a full snapshot, then uses monotonic sequence patches that
+upsert or remove only changed lifecycle items; a terminal full snapshot can
+resynchronize a missed patch. No full timeline is serialized per token or Tool
+step, and unchanged message cards do not rerender when a sibling message
+updates.
+
+A successful run emits setup, first-text, generation, and total milliseconds;
+cold/warm session-cache status; and input, output, cache-read, and cache-write
+token counts. Generation-finished is distinct from durable completion, so
+persistence and Memory finalization time remains visible in the total. The
+desktop shows first-text and total latency on the completed message, with the
+full breakdown in its tooltip.
+
+Provider model discovery uses a five-minute, 32-entry LRU keyed by a
+secret-free credential-authority generation. Configure, connect, disconnect,
+API-key rotation, and OAuth refresh-authority rotation invalidate the entry;
+ordinary OAuth access-token refresh does not. A catalog render reads and
+validates the bounded Pi auth file once, even when thousands of models are
+present. Per-Guru workbench mutation locks retain only weak registry entries,
+so visiting new Gurus cannot grow that registry for the life of the app.
+
+The initial Pi Tool surface contains bounded reads and capability discovery,
+not mutation schemas. Workbench authoring, Markdown publishing, Evidence and
+Decision creation, and optional Memory learning are deterministic built-in
+components loaded only when the agent discovers and selects them. This removes
+roughly 4–5 KB of JSON Schema from an ordinary first model request without
+granting new authority; Rust still owns the same per-turn allowlist. Capability
+search requires a non-empty query and returns components in stable ID order.
 
 `Use memory` and `Update memory` are independent and default on. With
-`evidence_create`, the agent selects exact values from delivered current-turn
-results using JSON Pointer. Rust validates the selection, copies the data into
-Evidence, and writes the producer receipt. An explicit `decision_submit`
+`evidence_create`, the agent writes a readable markdown body and cites
+delivered current-turn `result_ref` values. Rust verifies those receipts and
+writes a human-readable `# Sources` section. An explicit `decision_submit`
 becomes Decision even when `Update memory` is off.
 
 `chart_publish` is provider-neutral. The agent either maps a result's row and
@@ -84,6 +136,10 @@ idle pool is capped. Before reuse the host resets the process to its admin-only
 control surface so activation does not leak across turns. Provider credentials
 travel through a private bootstrap channel and never through Tool arguments,
 process arguments, general environment variables, receipts, or results.
+Within a turn, different MCP servers may execute concurrently. Inventory,
+control, and Tool calls for the same server remain serialized. A server reset
+runs in a background quarantine and the process enters the idle pool only after
+the reset succeeds; a terminal failure discards only that server slot.
 
 Self-improvement changes Guru Memory only. It does not change model weights, Skills, Tool bindings, or the finance floor.
 

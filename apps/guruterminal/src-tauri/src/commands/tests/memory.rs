@@ -1511,8 +1511,7 @@ async fn applied_evidence_dossier_is_searchable_without_update_memory() {
         commands::{
             memory_updates::apply_chat_memory_update,
             tool_executor::{
-                EvidenceCitation, EvidenceClaim, RunResult, RunResultProducer, StagedEvidence,
-                ToolCapture,
+                EvidenceCitation, RunResult, RunResultProducer, StagedEvidence, ToolCapture,
             },
         },
         domain::{ChatMessage, ChatMessageStatus, ChatRole, MemoryUpdateStatus},
@@ -1560,9 +1559,10 @@ async fn applied_evidence_dossier_is_searchable_without_update_memory() {
             tool_name: "web_fetch".into(),
             provider: Some("example.test".into()),
         },
+        origin: Some("https://example.test/tsmc".into()),
         request_digest: "a".repeat(64),
         response_digest: "b".repeat(64),
-        retrieved_at: "2026-08-13T00:00:00Z".into(),
+        retrieved_at: "2026-08-13T15:30:00Z".into(),
         payload: serde_json::json!({"utilization": "rose"}),
         warnings: Vec::new(),
         upstream_result_refs: Vec::new(),
@@ -1572,16 +1572,15 @@ async fn applied_evidence_dossier_is_searchable_without_update_memory() {
         evidence_id: "evidence:chat/tsmc".into(),
         title: "TSMC 3nm capacity".into(),
         summary: "Packaging tightness from this research turn.".into(),
-        as_of: "2026-08-13".into(),
-        claims: vec![EvidenceClaim {
-            text: "3nm utilization rose on CoWoS tightness.".into(),
-            citations: vec![EvidenceCitation {
-                result_ref: receipt.result_ref.clone(),
-                pointer: "/utilization".into(),
-                excerpt: None,
-                selected: serde_json::json!("rose"),
-                receipt,
-            }],
+        as_of: "2026-08-13T15:30:00Z".into(),
+        markdown: "3nm utilization rose on CoWoS tightness.".into(),
+        source: Some("https://example.test/tsmc".into()),
+        period: None,
+        entities: Vec::new(),
+        citations: vec![EvidenceCitation {
+            result_ref: receipt.result_ref.clone(),
+            note: Some("TSMC filing".into()),
+            receipt,
         }],
     });
 
@@ -1626,7 +1625,8 @@ async fn applied_evidence_dossier_is_searchable_without_update_memory() {
         .as_str()
         .unwrap()
         .contains("3nm utilization rose on CoWoS tightness."));
-    assert!(read["content"].as_str().unwrap().contains("result:tsmc"));
+    assert!(read["content"].as_str().unwrap().contains("# Sources"));
+    assert!(!read["content"].as_str().unwrap().contains("result:tsmc"));
 }
 
 fn assistant_message(id: &str, content: &str) -> ChatMessage {

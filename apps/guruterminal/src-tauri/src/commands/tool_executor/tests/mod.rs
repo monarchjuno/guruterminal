@@ -29,6 +29,8 @@ fn captured_capabilities(state: &AppState, guru_id: &str) -> BTreeSet<String> {
 
 fn decision(stance: &str, evidence_ids: Vec<String>) -> Value {
     json!({
+        "title": "Bounded test judgment",
+        "summary": "A sealed test decision.",
         "stance": stance,
         "horizon": "12 months",
         "probability": 0.5,
@@ -37,6 +39,16 @@ fn decision(stance: &str, evidence_ids: Vec<String>) -> Value {
         "uses_ids": [],
         "risks": ["Evidence can change"],
         "invalidation_conditions": ["The cited evidence is superseded"]
+    })
+}
+
+fn evidence(title: &str, result_ref: &str, markdown: &str) -> Value {
+    json!({
+        "title": title,
+        "summary": "Selected from a delivered result.",
+        "as_of": "2026-08-24T00:00:00Z",
+        "markdown": markdown,
+        "citations": [{"result_ref": result_ref}]
     })
 }
 
@@ -137,6 +149,27 @@ fn run_result_receipts_collect_web_and_mcp_warning_shapes() {
             "provider-delay",
             "top-level"
         ]
+    );
+}
+
+#[test]
+fn result_origin_reads_url_symbol_and_nested_mcp_arguments() {
+    assert_eq!(
+        result_origin(&json!({"url": "https://example.test/report"})).as_deref(),
+        Some("https://example.test/report")
+    );
+    assert_eq!(
+        result_origin(&json!({"symbol": "AAPL", "provider": "yfinance"})).as_deref(),
+        Some("AAPL")
+    );
+    assert_eq!(
+        result_origin(&json!({
+            "server_id": "mcp/openbb",
+            "tool_name": "equity_price_quote",
+            "arguments": {"symbol": "NVDA", "provider": "yfinance"}
+        }))
+        .as_deref(),
+        Some("NVDA")
     );
 }
 

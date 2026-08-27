@@ -15,8 +15,8 @@ page when the user is teaching how they invest.
 
 When a past Decision is in scope, exact-read the original and only the linked
 Wiki, Lens, or Evidence records material to the review. Gather the realized
-outcome through delivered current-turn results and create Evidence for the
-exact values used. Compare it with the original expectations and invalidation
+outcome through delivered current-turn results and create Evidence with a
+readable markdown body citing those results. Compare it with the original expectations and invalidation
 conditions, and separate reasoning quality from luck. Never rewrite the
 original Decision; any surviving future-usable lesson belongs in a Wiki or Lens
 change.
@@ -24,8 +24,8 @@ change.
 ## Research-driven Lens
 
 When no Decision is in scope, discover the Lens that new result data would
-change and exact-read it before patching. Create Evidence from the exact
-current-turn values used. Update only what that Evidence justifies, keep the
+change and exact-read it before patching. Create Evidence from the current-turn
+results actually used. Update only what that Evidence justifies, keep the
 lesson scoped and falsifiable, and prefer improving a semantic match to
 creating a duplicate. A same-kind active title or alias collision is the same
 Lens: exact-read its canonical ID and revise it.

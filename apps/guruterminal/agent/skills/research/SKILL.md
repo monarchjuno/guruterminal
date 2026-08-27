@@ -41,8 +41,8 @@ report.
    unless a Python package is required, and list every package on the first
    Python call.
 5. When source-grounded research informs the final answer, use
-   `evidence_create` for the claims actually used, selecting exact values from
-   delivered `result_ref` payloads with JSON Pointer. For a requested chart,
+   `evidence_create` with a readable markdown body and the delivered
+   `result_ref` values actually used. For a requested chart,
    use `chart_publish` with explicit result row and column pointers, or explicit
    inline rows and columns plus upstream result references. Call
    `decision_submit` only when the user asked for an explicit judgment.

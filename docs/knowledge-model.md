@@ -6,16 +6,17 @@ Current Markdown kinds:
 | --- | --- |
 | Wiki | Reusable facts about companies, markets, and concepts |
 | Lens | How this Guru invests: lessons, limits, what would prove it wrong |
-| Evidence | Dated claims selected from exact current-turn results, with host-recorded source receipts |
+| Evidence | Dated, readable observations grounded in current-turn results, with host-written sources |
 | Decision | A point-in-time judgment the Guru can learn from without rewriting history |
 
 Decision and Evidence are experience. Wiki and Lens are learned state that later
 Chat must use. One reserved Lens page (`lens:charter`) is the Guru's standing
 investment philosophy: when Use memory is on, Chat injects that page into the
-turn. A raw Tool result is not itself Evidence. The agent creates Evidence by
-selecting the exact values used by a claim from a delivered current-turn
-`result_ref`; Rust validates the JSON Pointers and records the immutable source
-receipt.
+turn. A raw Tool result is not itself Evidence. The agent creates Evidence by writing
+a human-readable markdown body and citing the delivered current-turn
+`result_ref` values actually used. Rust verifies those receipts and writes a
+readable `# Sources` section. `as_of` is the information cutoff in RFC3339 with
+time and timezone.
 
 ## Learning
 
