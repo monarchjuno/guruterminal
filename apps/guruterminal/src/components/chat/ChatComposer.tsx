@@ -12,13 +12,16 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
+  type Ref,
 } from "react";
+import { splitComposerMentions } from "../../chat/composerMentions";
 import type { FileUIPart } from "ai";
 import {
   PromptInput,
@@ -100,6 +103,34 @@ const assistHeading = (symbol: TriggerSymbol) => {
   if (symbol === "$") return "Skills";
   return "Skills & plugins";
 };
+
+function ComposerPromptHighlight({
+  prompt,
+  highlightRef,
+}: {
+  prompt: string;
+  highlightRef: Ref<HTMLDivElement>;
+}) {
+  const parts = splitComposerMentions(prompt);
+  return (
+    <div
+      ref={highlightRef}
+      className="composer-prompt-highlight"
+      aria-hidden="true"
+    >
+      {parts.map((part, index) =>
+        part.type === "mention" ? (
+          <span key={index} data-mention={part.kind}>
+            {part.value}
+          </span>
+        ) : (
+          <span key={index}>{part.value}</span>
+        ),
+      )}
+      {"\n"}
+    </div>
+  );
+}
 
 const activeTriggerAt = (
   value: string,
@@ -434,7 +465,9 @@ export function ChatComposer({
     null,
   );
   const [activeOption, setActiveOption] = useState(0);
+  const [isComposing, setIsComposing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const selectedModel = models.find(
     (model) => model.id === modelSelection.model_profile_id,
   );
@@ -465,6 +498,18 @@ export function ChatComposer({
   const syncTrigger = (target: HTMLTextAreaElement) => {
     setActiveTrigger(activeTriggerAt(target.value, target.selectionStart));
   };
+
+  const syncHighlightScroll = (target: HTMLTextAreaElement) => {
+    const highlight = highlightRef.current;
+    if (!highlight) return;
+    highlight.scrollTop = target.scrollTop;
+    highlight.scrollLeft = target.scrollLeft;
+  };
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) syncHighlightScroll(textarea);
+  }, [prompt]);
 
   const selectAssist = (option: AssistOption) => {
     if (!activeTrigger) return;
@@ -603,7 +648,9 @@ export function ChatComposer({
                   )}
                 </span>
                 <span>
-                  <strong>{option.label}</strong>
+                  <strong>
+                    <span data-mention={option.kind}>{option.label}</span>
+                  </strong>
                   <small>{option.detail}</small>
                 </span>
               </button>
@@ -661,23 +708,34 @@ export function ChatComposer({
       >
         <ComposerAttachmentTray />
         <PromptInputBody>
-          <PromptInputTextarea
-            ref={textareaRef}
-            aria-label="Message Guru"
-            placeholder="Ask Guru"
-            value={prompt}
-            onChange={handlePromptChange}
-            onClick={(event) => syncTrigger(event.currentTarget)}
-            {...(isRunning ? { onPaste: blockFilePasteWhileRunning } : {})}
-            onKeyDown={handlePromptKeyDown}
-            onKeyUp={(event) => {
-              if (
-                ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
-              ) {
-                syncTrigger(event.currentTarget);
-              }
-            }}
-          />
+          <div
+            className={cn("composer-prompt", isComposing && "is-composing")}
+            onCompositionStart={() => setIsComposing(true)}
+            onCompositionEnd={() => setIsComposing(false)}
+          >
+            <ComposerPromptHighlight
+              prompt={prompt}
+              highlightRef={highlightRef}
+            />
+            <PromptInputTextarea
+              ref={textareaRef}
+              aria-label="Message Guru"
+              placeholder="Ask Guru"
+              value={prompt}
+              onChange={handlePromptChange}
+              onClick={(event) => syncTrigger(event.currentTarget)}
+              onScroll={(event) => syncHighlightScroll(event.currentTarget)}
+              {...(isRunning ? { onPaste: blockFilePasteWhileRunning } : {})}
+              onKeyDown={handlePromptKeyDown}
+              onKeyUp={(event) => {
+                if (
+                  ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+                ) {
+                  syncTrigger(event.currentTarget);
+                }
+              }}
+            />
+          </div>
         </PromptInputBody>
         <PromptInputFooter className="composer-footer">
           <ComposerPromptTools

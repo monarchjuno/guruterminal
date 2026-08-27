@@ -225,15 +225,26 @@ describe("Guru Terminal · Chat composer", () => {
     await user.type(composer, "sec");
     await user.click(await screen.findByRole("option", { name: /@sec\.edgar/ }));
     expect(composer).toHaveValue("@sec.edgar ");
+    expect(
+      document.querySelector('[data-mention="plugin"]'),
+    ).toHaveTextContent("@sec.edgar");
     expect(memoryToggle).not.toBeChecked();
 
     await user.clear(composer);
     await user.type(composer, "$res");
-    expect(
-      await screen.findByRole("option", { name: /\$research/ }),
-    ).toBeVisible();
+    const researchOption = await screen.findByRole("option", {
+      name: /\$research/,
+    });
+    expect(researchOption).toBeVisible();
+    expect(within(researchOption).getByText("$research")).toHaveAttribute(
+      "data-mention",
+      "skill",
+    );
     await user.keyboard("{Enter}");
     expect(composer).toHaveValue("$research ");
+    expect(
+      document.querySelector('[data-mention="skill"]'),
+    ).toHaveTextContent("$research");
     expect(chatSend).not.toHaveBeenCalled();
 
     await user.clear(composer);
@@ -243,6 +254,9 @@ describe("Guru Terminal · Chat composer", () => {
     ).toBeVisible();
     await user.keyboard("{Enter}");
     expect(composer).toHaveValue("$wiki ");
+    expect(
+      document.querySelector('[data-mention="skill"]'),
+    ).toHaveTextContent("$wiki");
     expect(chatSend).not.toHaveBeenCalled();
   });
 
@@ -258,6 +272,14 @@ describe("Guru Terminal · Chat composer", () => {
           "$research $wiki @guruterminal.finance-core Samsung Electronics",
       },
     });
+    expect(
+      [...document.querySelectorAll('[data-mention="skill"]')].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(["$research", "$wiki"]);
+    expect(
+      document.querySelector('[data-mention="plugin"]'),
+    ).toHaveTextContent("@guruterminal.finance-core");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(chatSend).toHaveBeenCalled());
