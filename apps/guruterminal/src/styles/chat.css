@@ -1258,9 +1258,19 @@ p.memory-update-footer {
   cursor: pointer;
 }
 
-.composer-assist > button:hover,
+.composer-assist > button:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
 .composer-assist > button[aria-selected="true"] {
-  background: var(--muted);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.composer-assist > button:hover small,
+.composer-assist > button[aria-selected="true"] small {
+  color: var(--ink-soft);
 }
 
 .composer-assist-icon {
