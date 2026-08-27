@@ -409,9 +409,10 @@ describe("Guru Terminal · Chat composer", () => {
       update_memory: false,
       thinking_level: "max",
     });
-    await waitFor(() =>
-      expect(document.querySelectorAll("article.message.assistant.complete")).toHaveLength(2),
-    );
+    await waitFor(() => {
+      expect(modelMenu).toBeEnabled();
+      expect(document.querySelector(".composer-running")).toBeNull();
+    });
 
     await user.click(screen.getByRole("checkbox", { name: "Use memory" }));
     await user.click(screen.getByRole("checkbox", { name: "Update memory" }));

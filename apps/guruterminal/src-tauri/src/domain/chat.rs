@@ -156,13 +156,13 @@ impl ChatDecision {
             || object.get("title").is_some_and(|value| {
                 !value.as_str().is_some_and(|title| {
                     let chars = title.chars().count();
-                    chars >= 1 && chars <= 180 && !title.contains('\0')
+                    (1..=180).contains(&chars) && !title.contains('\0')
                 })
             })
             || object.get("summary").is_some_and(|value| {
                 !value.as_str().is_some_and(|summary| {
                     let chars = summary.chars().count();
-                    chars >= 1 && chars <= 400 && !summary.contains('\0')
+                    (1..=400).contains(&chars) && !summary.contains('\0')
                 })
             })
         {

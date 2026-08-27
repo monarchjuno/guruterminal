@@ -459,7 +459,7 @@ fn bounded_text(value: Option<&Value>, min: usize, max: usize) -> Result<String,
         .map(str::trim)
         .filter(|text| {
             let chars = text.chars().count();
-            chars >= min && chars <= max && !text.contains('\0')
+            (min..=max).contains(&chars) && !text.contains('\0')
         })
         .map(str::to_owned)
         .ok_or(BrokerError::Malformed)
