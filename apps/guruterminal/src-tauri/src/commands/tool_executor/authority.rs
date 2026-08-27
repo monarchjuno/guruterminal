@@ -506,7 +506,10 @@ fn evidence_markdown_has_frontmatter_fence(markdown: &str) -> bool {
 
 fn evidence_markdown_has_sources_heading(markdown: &str) -> bool {
     markdown.lines().any(|line| {
-        let hashes = line.chars().take_while(|character| character == &'#').count();
+        let hashes = line
+            .chars()
+            .take_while(|character| character == &'#')
+            .count();
         hashes > 0
             && hashes <= 6
             && line.as_bytes().get(hashes) == Some(&b' ')
