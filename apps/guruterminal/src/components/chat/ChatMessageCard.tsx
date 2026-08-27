@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   ArrowUpRightIcon,
   ChartNoAxesCombinedIcon,
@@ -19,6 +19,11 @@ const attachmentSize = (bytes: number) =>
     : bytes < 1024 * 1024
       ? `${Math.ceil(bytes / 1024)} KB`
       : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+const responseDuration = (milliseconds: number) =>
+  milliseconds < 1_000
+    ? `${milliseconds}ms`
+    : `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 
 function MessageAttachment({
   attachment,
@@ -111,7 +116,7 @@ type Props = {
   onRevertMemory?: (recordId: string, commitId: string) => Promise<void>;
 };
 
-export function ChatMessageCard({
+function ChatMessageCardComponent({
   message,
   guruName,
   onOpenMemory,
@@ -150,6 +155,20 @@ export function ChatMessageCard({
         `thinking ${message.execution_model.thinking_level}`,
       ].join(" · ")
     : undefined;
+  const performanceTitle = message.performance
+    ? [
+        `setup ${responseDuration(message.performance.setupMs)}`,
+        message.performance.firstTextMs === undefined
+          ? undefined
+          : `first text ${responseDuration(message.performance.firstTextMs)}`,
+        `generation ${responseDuration(message.performance.generationMs)}`,
+        `${message.performance.sessionCache} session`,
+        `${message.performance.inputTokens + message.performance.cacheReadTokens + message.performance.cacheWriteTokens} input tokens`,
+        `${message.performance.outputTokens} output tokens`,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
 
   return (
     <article className={`message ${message.role} ${message.status ?? ""}`}>
@@ -161,6 +180,15 @@ export function ChatMessageCard({
           <span title={executionModelTitle}>
             {message.execution_model.name} ·{" "}
             {message.execution_model.thinking_level}
+          </span>
+        )}
+        {message.performance && (
+          <span title={performanceTitle}>
+            {message.performance.firstTextMs === undefined
+              ? "No text latency"
+              : `First text ${responseDuration(message.performance.firstTextMs)}`}
+            {" · "}
+            {responseDuration(message.performance.totalMs)} total
           </span>
         )}
       </div>
@@ -349,3 +377,30 @@ export function ChatMessageCard({
     </article>
   );
 }
+
+const sameMessageCardProps = (previous: Props, next: Props) =>
+  previous.message.id === next.message.id &&
+  previous.message.content === next.message.content &&
+  previous.message.status === next.message.status &&
+  previous.message.created_at === next.message.created_at &&
+  previous.message.progress === next.message.progress &&
+  previous.message.memory_refs === next.message.memory_refs &&
+  previous.message.memory_update === next.message.memory_update &&
+  previous.message.decision === next.message.decision &&
+  previous.message.artifact_refs === next.message.artifact_refs &&
+  previous.message.attachments === next.message.attachments &&
+  previous.message.execution_model === next.message.execution_model &&
+  previous.message.agent_harness === next.message.agent_harness &&
+  previous.message.performance === next.message.performance &&
+  previous.guruName === next.guruName &&
+  previous.onOpenMemory === next.onOpenMemory &&
+  previous.onOpenInLibrary === next.onOpenInLibrary &&
+  previous.onOpenArtifact === next.onOpenArtifact &&
+  previous.onOpenLink === next.onOpenLink &&
+  previous.onReadAttachment === next.onReadAttachment &&
+  previous.onRevertMemory === next.onRevertMemory;
+
+export const ChatMessageCard = memo(
+  ChatMessageCardComponent,
+  sameMessageCardProps,
+);

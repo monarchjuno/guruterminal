@@ -229,7 +229,11 @@ async fn chat_immediate_abort_is_admitted_before_preflight_and_never_starts_pi()
     let workspace = temporary.path().join("workspace");
     initialized_workspace(&workspace, "chat-abort-preflight");
     let runtime_path = temporary.path().join("slow-guruterminal-core");
-    fs::write(&runtime_path, "#!/bin/sh\nsleep 0.2\nprintf '[]\\n'\n").unwrap();
+    fs::write(
+        &runtime_path,
+        "#!/bin/sh\nsleep 0.2\nprintf '%s\\n' '{\"check\":{\"valid\":true},\"health\":{\"kinds\":[]},\"revision\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"records\":[],\"charter\":null}'\n",
+    )
+    .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o700)).unwrap();
 
     let mut state = AppState::for_test(temporary.path().join("app"));
@@ -313,7 +317,7 @@ async fn chat_immediate_abort_is_admitted_before_preflight_and_never_starts_pi()
 
     let state = app.state::<AppState>();
     assert_eq!(state.run_coordinator.active_count(), 0);
-    assert_eq!(event_count.load(Ordering::SeqCst), 2);
+    assert_eq!(event_count.load(Ordering::SeqCst), 3);
     assert!(fs::read_dir(&state.artifacts.broker_dir)
         .unwrap()
         .next()
@@ -692,15 +696,17 @@ async fn chat_launch_failure_persists_a_sanitized_terminal_error() {
     let state = app.state::<AppState>();
     assert_eq!(state.run_coordinator.active_count(), 0);
     let events = events.lock().unwrap();
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
     assert_eq!(events[0]["type"], "started");
-    assert_eq!(events[1]["type"], "error");
-    assert_eq!(events[1]["message"], FAILED_CHAT_CONTENT);
-    assert_eq!(events[1]["final_text"], FAILED_CHAT_CONTENT);
-    assert!(events[1]["message_id"].as_str().is_some());
-    assert!(events[1]["created_at"].as_str().is_some());
-    assert!(events[1]["execution_model"].is_object());
-    assert!(events[1]["agent_harness"].is_object());
+    assert_eq!(events[1]["type"], "progress");
+    let terminal = &events[2];
+    assert_eq!(terminal["type"], "error");
+    assert_eq!(terminal["message"], FAILED_CHAT_CONTENT);
+    assert_eq!(terminal["final_text"], FAILED_CHAT_CONTENT);
+    assert!(terminal["message_id"].as_str().is_some());
+    assert!(terminal["created_at"].as_str().is_some());
+    assert!(terminal["execution_model"].is_object());
+    assert!(terminal["agent_harness"].is_object());
     let stored = state.store.get_chat(&chat.id).unwrap().unwrap();
     assert_eq!(stored.messages.len(), 2);
     assert_eq!(stored.messages[0].role, ChatRole::User);

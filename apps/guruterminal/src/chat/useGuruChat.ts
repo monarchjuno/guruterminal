@@ -27,7 +27,7 @@ type Options = {
 
 // Tauri Channels may drain a burst of native token events synchronously. Keep
 // progressive rendering responsive while yielding between React store updates.
-const STREAM_RENDER_THROTTLE_MS = 50;
+const STREAM_RENDER_THROTTLE_MS = 32;
 
 const markLatestAssistantAborted = (messages: GuruUIMessage[]) => {
   let assistantIndex = messages.length - 1;

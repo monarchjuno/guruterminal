@@ -54,6 +54,13 @@ export type ChatProgress = {
   items: ChatProgressItem[];
 };
 
+export type ChatProgressPatch = {
+  sequence: number;
+  upsertItems?: ChatProgressItem[];
+  removeItemIds?: string[];
+  finishedAtMs?: number;
+};
+
 export type ChatArtifactKind = "markdown" | "chart";
 
 export type ChatArtifactRef = {
@@ -250,6 +257,19 @@ export type ChatMessage = {
   progress?: ChatProgress;
   attachments?: ChatAttachment[];
   artifact_refs?: ChatArtifactRef[];
+  performance?: ChatPerformance;
+};
+
+export type ChatPerformance = {
+  setupMs: number;
+  firstTextMs?: number;
+  generationMs: number;
+  totalMs: number;
+  sessionCache: "cold" | "warm";
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type ChatDecision = {
@@ -342,8 +362,32 @@ export type ChatStreamEvent =
   | { type: "started"; run_id: string }
   | { type: "memory"; run_id: string; memories: MemoryRef[] }
   | { type: "delta"; run_id: string; text: string }
+  | { type: "assistant_draft_started"; run_id: string; draft_id: string }
+  | {
+      type: "assistant_draft_delta";
+      run_id: string;
+      draft_id: string;
+      delta: string;
+    }
+  | {
+      type: "assistant_draft_finished";
+      run_id: string;
+      draft_id: string;
+      disposition: "final" | "commentary" | "discarded";
+    }
+  | {
+      type: "generation_finished";
+      run_id: string;
+      performance: ChatPerformance;
+    }
   | { type: "title"; run_id: string; title: string }
-  | { type: "progress"; run_id: string; progress: ChatProgress }
+  | {
+      type: "progress";
+      run_id: string;
+      sequence?: number;
+      progress: ChatProgress;
+    }
+  | { type: "progress_patch"; run_id: string; patch: ChatProgressPatch }
   | {
       type: "memory_update";
       run_id: string;
@@ -367,6 +411,7 @@ export type ChatStreamEvent =
       created_at: string;
       execution_model: ExecutionModelLock;
       agent_harness: AgentHarnessSnapshot;
+      performance?: ChatPerformance;
     }
   | { type: "aborted"; run_id: string }
   | {

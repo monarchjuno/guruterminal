@@ -58,7 +58,7 @@ pub(in crate::commands) fn write_knowledge_runtime(path: &std::path::Path) {
     fs::write(
         path,
         r#"#!/usr/bin/env python3
-import json, sys
+import hashlib, json, sys
 from pathlib import Path
 
 def parse():
@@ -152,6 +152,22 @@ def docs(root, kind=None):
             })
     return out
 
+def memory_revision(root):
+    memory_root = Path(root) / "guruterminal"
+    digest = hashlib.sha256()
+    records = sorted(
+        path for path in memory_root.rglob("*.md")
+        if path.is_file()
+    )
+    for path in records:
+        relative = path.relative_to(memory_root).as_posix().encode()
+        content = path.read_bytes()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
 positionals, workspace, kind, section, include_revoked, as_of = parse()
 command = positionals[0] if positionals else ""
 action = positionals[1] if len(positionals) > 1 else ""
@@ -159,6 +175,18 @@ if command == "knowledge" and action == "check":
     print(json.dumps({"valid": True, "documents": 0, "errors": []}))
 elif command == "knowledge" and action == "health":
     print(json.dumps({"kinds": []}))
+elif command == "knowledge" and action == "context":
+    records = docs(workspace)
+    for record in records:
+        record.pop("text", None)
+        record.pop("content", None)
+    print(json.dumps({
+        "check": {"valid": True, "documents": len(records), "errors": []},
+        "health": {"kinds": []},
+        "revision": memory_revision(workspace),
+        "records": records,
+        "charter": None,
+    }))
 elif command == "knowledge" and action == "list":
     records = docs(workspace, kind)
     for record in records:

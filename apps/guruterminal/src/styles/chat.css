@@ -858,6 +858,7 @@
 }
 
 .composer [data-slot="input-group"] {
+  height: auto;
   border-color: var(--border);
   border-radius: var(--gg-radius-xl);
   background: var(--card);
@@ -995,6 +996,84 @@
 .composer textarea {
   min-height: 48px;
   padding: 13px 14px 7px;
+}
+
+.composer-prompt {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.composer-prompt-highlight,
+.composer .composer-prompt textarea {
+  margin: 0;
+  font: inherit;
+  font-size: var(--gg-text-base);
+  line-height: 1.55;
+  letter-spacing: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+.composer-prompt-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 13px 14px 7px;
+  color: var(--ink);
+  pointer-events: none;
+  user-select: none;
+  scrollbar-width: none;
+}
+
+.composer-prompt-highlight::-webkit-scrollbar {
+  display: none;
+}
+
+.composer .composer-prompt textarea {
+  position: relative;
+  z-index: 1;
+  color: transparent;
+  caret-color: var(--ink);
+  -webkit-text-fill-color: transparent;
+}
+
+.composer .composer-prompt textarea::placeholder {
+  color: var(--muted);
+  -webkit-text-fill-color: var(--muted);
+}
+
+.composer .composer-prompt textarea::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.composer-prompt.is-composing textarea {
+  color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
+}
+
+.composer-prompt.is-composing .composer-prompt-highlight {
+  visibility: hidden;
+}
+
+.composer-prompt-highlight [data-mention="skill"],
+.composer-assist [data-mention="skill"] {
+  color: var(--accent);
+}
+
+.composer-prompt-highlight [data-mention="plugin"],
+.composer-assist [data-mention="plugin"] {
+  color: var(--focus-ring);
+}
+
+.composer-prompt-highlight [data-mention] {
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .composer-model-menu {

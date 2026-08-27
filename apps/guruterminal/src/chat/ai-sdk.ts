@@ -5,7 +5,9 @@ import type {
   ChatArtifactRef,
   ChatDecision,
   ChatMessage,
+  ChatPerformance,
   ChatProgress,
+  ChatProgressPatch,
   ChatStreamEvent,
   GuruTerminalBridge,
   MemoryRef,
@@ -25,6 +27,7 @@ export type GuruChatMetadata = {
   agent_harness?: AgentHarnessSnapshot;
   final_text?: string;
   progress?: ChatProgress;
+  performance?: ChatPerformance;
 };
 
 export type GuruChatData = {
@@ -35,6 +38,7 @@ export type GuruChatData = {
   decision: ChatDecision;
   artifact: ChatArtifactRef;
   run: { run_id: string };
+  performance: ChatPerformance;
 };
 
 export type GuruUIMessage = UIMessage<GuruChatMetadata, GuruChatData>;
@@ -66,7 +70,61 @@ const messageText = (message: GuruUIMessage) =>
     .map((part) => part.text)
     .join("");
 
+const activeDraftText = (message: GuruUIMessage) => {
+  for (let index = message.parts.length - 1; index >= 0; index -= 1) {
+    const part = message.parts[index];
+    if (part.type === "reasoning" && part.state === "streaming") {
+      return part.text;
+    }
+  }
+  return "";
+};
+
 const UNKNOWN_MESSAGE_CREATED_AT = "1970-01-01T00:00:00.000Z";
+
+export type ChatProgressStreamState = {
+  progress: ChatProgress;
+  sequence: number;
+};
+
+export const applyChatProgressSnapshot = (
+  state: ChatProgressStreamState | undefined,
+  progress: ChatProgress,
+  sequence = 0,
+): ChatProgressStreamState =>
+  state && sequence <= state.sequence ? state : { progress, sequence };
+
+export const applyChatProgressPatch = (
+  state: ChatProgressStreamState | undefined,
+  patch: ChatProgressPatch,
+): ChatProgressStreamState | undefined => {
+  if (!state || patch.sequence !== state.sequence + 1) return state;
+
+  const removeIds = new Set(patch.removeItemIds ?? []);
+  const items = state.progress.items
+    .filter((item) => !removeIds.has(item.id))
+    .map((item) => ({ ...item }));
+  const indices = new Map(items.map((item, index) => [item.id, index]));
+  for (const item of patch.upsertItems ?? []) {
+    const index = indices.get(item.id);
+    if (index === undefined) {
+      indices.set(item.id, items.length);
+      items.push(item);
+    } else {
+      items[index] = item;
+    }
+  }
+  return {
+    sequence: patch.sequence,
+    progress: {
+      ...state.progress,
+      ...(patch.finishedAtMs === undefined
+        ? {}
+        : { finishedAtMs: patch.finishedAtMs }),
+      items,
+    },
+  };
+};
 
 const dataUrlPayload = (file: FileUIPart) => {
   const match = file.url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/);
@@ -97,6 +155,7 @@ export const toGuruUIMessage = (message: ChatMessage): GuruUIMessage => {
       refs_digest: message.refs_digest,
       execution_model: message.execution_model,
       agent_harness: message.agent_harness,
+      performance: message.performance,
     },
     parts: [
       { type: "text", text: message.content, state: "done" },
@@ -165,7 +224,10 @@ export const fromGuruUIMessage = (message: GuruUIMessage): ChatMessage => {
     content:
       message.role === "assistant" && message.metadata?.final_text !== undefined
         ? message.metadata.final_text
-        : messageText(message),
+        : messageText(message) ||
+          (message.role === "assistant" && status === "streaming"
+            ? activeDraftText(message)
+            : ""),
     created_at: message.metadata?.created_at ?? UNKNOWN_MESSAGE_CREATED_AT,
     status,
     memory_refs: memoryPart?.data,
@@ -177,6 +239,7 @@ export const fromGuruUIMessage = (message: GuruUIMessage): ChatMessage => {
     refs_digest: message.metadata?.refs_digest,
     execution_model: message.metadata?.execution_model,
     agent_harness: message.metadata?.agent_harness,
+    performance: message.metadata?.performance,
     progress,
     attachments:
       attachmentParts.length > 0
@@ -226,11 +289,17 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
         let started = false;
         let finished = false;
         let hasText = false;
+        let textStarted = false;
+        let activeDraftId: string | undefined;
+        let bufferedDraftId: string | undefined;
+        let bufferedDraftDelta = "";
+        let draftFlushTimer: number | undefined;
         let abortRequested = false;
         let abortInFlight = false;
         let abortConfirmed = false;
         let abortAttempts = 0;
         let abortRetry: number | undefined;
+        let progressState: ChatProgressStreamState | undefined;
 
         const enqueue = (chunk: UIMessageChunk) => {
           if (!finished && !abortSignal?.aborted) controller.enqueue(chunk);
@@ -243,12 +312,45 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
             type: "message-metadata",
             messageMetadata: { created_at: createdAt, status: "streaming" },
           });
+        };
+        const startText = () => {
+          if (textStarted) return;
+          textStarted = true;
           enqueue({ type: "text-start", id: textId });
+        };
+        const flushDraftDelta = () => {
+          if (draftFlushTimer !== undefined) {
+            window.clearTimeout(draftFlushTimer);
+            draftFlushTimer = undefined;
+          }
+          if (!bufferedDraftId || !bufferedDraftDelta) return;
+          const id = bufferedDraftId;
+          const delta = bufferedDraftDelta;
+          bufferedDraftId = undefined;
+          bufferedDraftDelta = "";
+          enqueue({ type: "reasoning-delta", id, delta });
+        };
+        const bufferDraftDelta = (id: string, delta: string) => {
+          if (bufferedDraftId && bufferedDraftId !== id) flushDraftDelta();
+          bufferedDraftId = id;
+          bufferedDraftDelta += delta;
+          if (draftFlushTimer === undefined) {
+            draftFlushTimer = window.setTimeout(flushDraftDelta, 32);
+          }
+        };
+        const finishDraft = () => {
+          flushDraftDelta();
+          if (!activeDraftId) return;
+          enqueue({ type: "reasoning-end", id: activeDraftId });
+          activeDraftId = undefined;
         };
         const close = () => {
           if (finished) return;
           finished = true;
           if (abortRetry !== undefined) window.clearTimeout(abortRetry);
+          if (draftFlushTimer !== undefined) {
+            window.clearTimeout(draftFlushTimer);
+          }
           if (!abortSignal?.aborted) controller.close();
           abortSignal?.removeEventListener("abort", abortNativeRun);
         };
@@ -257,9 +359,11 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
           terminal?: Extract<ChatStreamEvent, { type: "error" }>,
         ) => {
           startResponse(terminal?.created_at);
+          finishDraft();
           const finalText = terminal?.final_text ?? message;
           if (!hasText) {
             hasText = true;
+            startText();
             enqueue({ type: "text-delta", id: textId, delta: finalText });
           }
           if (terminal?.progress) {
@@ -284,7 +388,7 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
                 : {}),
             },
           });
-          enqueue({ type: "text-end", id: textId });
+          if (textStarted) enqueue({ type: "text-end", id: textId });
           enqueue({ type: "error", errorText: message });
           close();
         };
@@ -320,6 +424,7 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
         const onEvent = (event: ChatStreamEvent) => {
           if (finished) return;
           if (event.run_id !== runId) return;
+          if (event.type !== "assistant_draft_delta") flushDraftDelta();
           if (event.type === "started") {
             startResponse();
             enqueue({
@@ -347,16 +452,63 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
             enqueue({ type: "data-memory", data: event.memories });
             return;
           }
+          if (event.type === "assistant_draft_started") {
+            finishDraft();
+            activeDraftId = event.draft_id;
+            enqueue({ type: "reasoning-start", id: event.draft_id });
+            return;
+          }
+          if (event.type === "assistant_draft_delta") {
+            if (activeDraftId !== event.draft_id) {
+              finishDraft();
+              activeDraftId = event.draft_id;
+              enqueue({ type: "reasoning-start", id: event.draft_id });
+            }
+            bufferDraftDelta(event.draft_id, event.delta);
+            return;
+          }
+          if (event.type === "assistant_draft_finished") {
+            if (activeDraftId === event.draft_id) finishDraft();
+            return;
+          }
+          if (event.type === "generation_finished") {
+            enqueue({
+              type: "data-performance",
+              id: `performance-${responseId}`,
+              data: event.performance,
+              transient: true,
+            });
+            return;
+          }
           if (event.type === "delta") {
             hasText = true;
+            startText();
             enqueue({ type: "text-delta", id: textId, delta: event.text });
             return;
           }
           if (event.type === "progress") {
+            const next = applyChatProgressSnapshot(
+              progressState,
+              event.progress,
+              event.sequence,
+            );
+            if (next === progressState) return;
+            progressState = next;
             enqueue({
               type: "data-progress",
               id: `progress-${responseId}`,
-              data: event.progress,
+              data: next.progress,
+            });
+            return;
+          }
+          if (event.type === "progress_patch") {
+            const next = applyChatProgressPatch(progressState, event.patch);
+            if (!next || next === progressState) return;
+            progressState = next;
+            enqueue({
+              type: "data-progress",
+              id: `progress-${responseId}`,
+              data: next.progress,
             });
             return;
           }
@@ -384,6 +536,16 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
             return;
           }
           if (event.type === "completed") {
+            finishDraft();
+            if (!hasText && event.final_text) {
+              hasText = true;
+              startText();
+              enqueue({
+                type: "text-delta",
+                id: textId,
+                delta: event.final_text,
+              });
+            }
             enqueue({
               type: "message-metadata",
               messageMetadata: {
@@ -393,16 +555,19 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
                 status: "complete",
                 execution_model: event.execution_model,
                 agent_harness: event.agent_harness,
+                performance: event.performance,
               },
             });
-            enqueue({ type: "text-end", id: textId });
+            if (textStarted) enqueue({ type: "text-end", id: textId });
             enqueue({ type: "finish", finishReason: "stop" });
             close();
             return;
           }
           if (event.type === "aborted") {
+            finishDraft();
             if (!hasText) {
               hasText = true;
+              startText();
               enqueue({
                 type: "text-delta",
                 id: textId,
@@ -415,7 +580,7 @@ export class TauriChatTransport implements ChatTransport<GuruUIMessage> {
                 status: "aborted",
               },
             });
-            enqueue({ type: "text-end", id: textId });
+            if (textStarted) enqueue({ type: "text-end", id: textId });
             enqueue({ type: "abort", reason: "Stopped by user" });
             close();
             return;
