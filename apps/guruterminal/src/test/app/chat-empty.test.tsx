@@ -1,11 +1,13 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MockGuruTerminalBridge } from "../../bridge";
 import { openApp } from "../renderApp";
 
 describe("Guru Terminal · empty Chat", () => {
-  it("inserts a Skill token from the empty state", async () => {
+  it("opens a draft without adding a session until the first message", async () => {
     const user = userEvent.setup();
-    await openApp();
+    const bridge = await openApp();
+    const create = vi.spyOn(bridge, "chatCreate");
 
     await user.click(
       screen.getByRole("button", {
@@ -29,6 +31,10 @@ describe("Guru Terminal · empty Chat", () => {
     expect(screen.getByRole("button", { name: "Use $wiki" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Use $lens" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Use $decision" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "New chat" }),
+    ).not.toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Use $wiki" }));
     expect(screen.getByRole("textbox", { name: "Message Guru" })).toHaveValue(
@@ -42,6 +48,19 @@ describe("Guru Terminal · empty Chat", () => {
     expect(
       screen.getByRole("checkbox", { name: "Update memory" }),
     ).toBeDisabled();
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Guru" }),
+      "Samsung earnings",
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({ guru_id: "guru-quality" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: /Samsung earnings/ }),
+    ).toBeVisible();
   });
 
   it("routes a Lens skill chip into Chat with memory locked on", async () => {

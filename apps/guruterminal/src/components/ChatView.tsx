@@ -37,6 +37,7 @@ import {
   type QueuedChatMessage,
 } from "./chat/ChatPendingQueue";
 import { isComposerMentionPlugin } from "../app/chatOnboarding";
+import { emptyChatThread, isEmptyChatThreadId } from "../app/emptyChat";
 import { promptSelectsMemorySkill } from "../chat/memorySkillSelection";
 
 /** Workspace-launch callbacks already bound to the visible guru and thread. */
@@ -145,10 +146,12 @@ export function ChatView({
     [memorySkillSelected, updateMemory, useMemory],
   );
 
-  const activeThread = useMemo<ChatThread | undefined>(
-    () => threads.find((thread) => thread.id === activeThreadId) ?? threads[0],
-    [activeThreadId, threads],
-  );
+  const activeThread = useMemo<ChatThread | undefined>(() => {
+    if (isEmptyChatThreadId(activeThreadId)) {
+      return emptyChatThread(guru.id);
+    }
+    return threads.find((thread) => thread.id === activeThreadId) ?? threads[0];
+  }, [activeThreadId, guru.id, threads]);
   const readAttachment = useCallback(
     async (messageId: string, attachmentId: string) => {
       if (!activeThread?.id) throw new Error("Chat thread is unavailable.");
@@ -225,6 +228,20 @@ export function ChatView({
   useEffect(() => {
     if (!activeThreadId && threads[0]) setActiveThreadId(threads[0].id);
   }, [activeThreadId, setActiveThreadId, threads]);
+
+  const previousThreadIdRef = useRef(activeThreadId);
+  useEffect(() => {
+    const previous = previousThreadIdRef.current;
+    previousThreadIdRef.current = activeThreadId;
+    if (
+      isEmptyChatThreadId(activeThreadId) &&
+      previous &&
+      !isEmptyChatThreadId(previous)
+    ) {
+      setPrompt("");
+      memoryBeforeLock.current = null;
+    }
+  }, [activeThreadId]);
 
   useEffect(() => {
     const nextUseMemory = activeThread?.use_memory ?? true;
@@ -320,7 +337,14 @@ export function ChatView({
     if ((!text && files.length === 0) || !selectedModelProfileId) return;
 
     if (isRunning) {
-      if (files.length > 0 || !text || !activeThread?.id) return;
+      if (
+        files.length > 0 ||
+        !text ||
+        !activeThread?.id ||
+        isEmptyChatThreadId(activeThread.id)
+      ) {
+        return;
+      }
       const receipt = await steer(text);
       if (receipt) {
         const threadId = activeThread.id;
@@ -334,7 +358,10 @@ export function ChatView({
       return;
     }
 
-    let targetThread = activeThread;
+    let targetThread =
+      activeThread && !isEmptyChatThreadId(activeThread.id)
+        ? activeThread
+        : undefined;
     if (!targetThread) targetThread = (await onCreateThread()) ?? undefined;
     if (!targetThread) return;
     changePrompt("");
@@ -554,7 +581,7 @@ export function ChatView({
           onRevertMemory={revertMemory}
         />
 
-        {activeThread && (
+        {activeThread && !isEmptyChatThreadId(activeThread.id) && (
           <ChatPendingQueue
             queued={queuedByThread[activeThread.id] ?? []}
             holdReason={queueHoldByThread[activeThread.id]}

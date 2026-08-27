@@ -365,9 +365,10 @@ describe("Guru Terminal · Shell and Guru", () => {
     ).toBeVisible();
   });
 
-  it("shows a new session even when the Guru list was collapsed", async () => {
+  it("opens a draft even when the Guru list was collapsed", async () => {
     const user = userEvent.setup();
-    await openApp();
+    const bridge = await openApp();
+    const create = vi.spyOn(bridge, "chatCreate");
 
     await user.click(screen.getByRole("button", { name: "Quality Compounder" }));
     expect(
@@ -382,7 +383,16 @@ describe("Guru Terminal · Shell and Guru", () => {
       }),
     );
     expect(
-      await screen.findByRole("button", { name: "New chat" }),
+      await screen.findByRole("heading", { name: "New chat" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "New chat" }),
+    ).not.toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", {
+        name: "How should we read the margin decline?",
+      }),
     ).toBeVisible();
   });
 
@@ -445,12 +455,23 @@ describe("Guru Terminal · Shell and Guru", () => {
         name: "New session for Contrarian Value",
       }),
     );
+    expect(create).not.toHaveBeenCalled();
+    await screen.findByRole("heading", { name: "New chat" });
+    expect(
+      screen.queryByRole("button", { name: "New chat" }),
+    ).not.toBeInTheDocument();
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Guru" }),
+      "Downside follow-up",
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith({ guru_id: "guru-value" }),
     );
-    await screen.findByRole("heading", { name: "New chat" });
-
-    const newThread = screen.getByRole("button", { name: "New chat" });
+    const newThread = await screen.findByRole("button", {
+      name: "Downside follow-up",
+    });
     const newThreadRow = newThread.closest("li");
     expect(newThreadRow).not.toBeNull();
     await user.click(
@@ -458,21 +479,21 @@ describe("Guru Terminal · Shell and Guru", () => {
     );
     const name = screen.getByRole("textbox", { name: "Name" });
     await user.clear(name);
-    await user.type(name, "Downside follow-up");
+    await user.type(name, "Renamed follow-up");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(rename).toHaveBeenCalledWith({
         guru_id: "guru-value",
         thread_id: expect.any(String),
-        title: "Downside follow-up",
+        title: "Renamed follow-up",
       }),
     );
     expect(
-      screen.getByRole("button", { name: "Downside follow-up" }),
+      screen.getByRole("button", { name: "Renamed follow-up" }),
     ).toBeVisible();
 
     const renamedThread = screen.getByRole("button", {
-      name: "Downside follow-up",
+      name: "Renamed follow-up",
     });
     const renamedThreadRow = renamedThread.closest("li");
     expect(renamedThreadRow).not.toBeNull();
@@ -492,7 +513,7 @@ describe("Guru Terminal · Shell and Guru", () => {
       }),
     );
     expect(
-      screen.queryByRole("button", { name: "Downside follow-up" }),
+      screen.queryByRole("button", { name: "Renamed follow-up" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1056,6 +1077,12 @@ describe("Guru Terminal · Shell and Guru", () => {
         name: "New session for Quality Compounder",
       }),
     );
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Guru" }),
+      "Late chat from the previous Guru",
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bridge.chatCreate).toHaveBeenCalled());
     await chooseGuru(user, "Contrarian Value");
     await screen.findByRole("heading", { name: "Downside scenario review" });
 

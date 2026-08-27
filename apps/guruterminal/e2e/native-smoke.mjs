@@ -422,7 +422,7 @@ try {
     await capture("memory");
   });
 
-  await step("Chat onboarding and session rename, create, and delete", async () => {
+  await step("Chat onboarding and new-session draft", async () => {
     await navigateTo("Chat");
     const panel = await displayed("main");
     await assertCurrentTab("chat");
@@ -430,62 +430,20 @@ try {
     await childWithText(panel, "button", "Open Settings");
 
     await (await displayed('button[aria-label="New session for Release Ready Agent"]')).click();
-    await browser.waitUntil(
-      async () => (await browser.$$('button[aria-label="Rename session"]')).length === 1,
-      { timeout: 10_000, interval: 100, timeoutMsg: "First Chat session was not created" },
+    await waitForText(panel, "Connect a model provider");
+    assert.equal(
+      (await browser.$$('button[aria-label="Rename session"]')).length,
+      0,
+      "A new Chat draft must not appear in the session list",
     );
-    let renameButtons = await browser.$$('button[aria-label="Rename session"]');
-    assert.equal(renameButtons.length, 1);
-    await renameButtons[0].moveTo();
-    await renameButtons[0].click();
-    let dialog = await displayed('[role="dialog"]');
-    await (await displayed("#rename-thread-name")).setValue("Release smoke chat");
-    await clickButton("Save", dialog);
-    await waitForText(await displayed('[aria-label="Application navigation"]'), "Release smoke chat");
 
     await (await displayed('button[aria-label="New session for Release Ready Agent"]')).click();
-    await browser.waitUntil(
-      async () => (await browser.$$('button[aria-label="Rename session"]')).length === 2,
-      { timeout: 10_000, interval: 100, timeoutMsg: "Second Chat session was not created" },
+    assert.equal(
+      (await browser.$$('button[aria-label="Rename session"]')).length,
+      0,
+      "Opening another Chat draft must still leave the session list empty",
     );
-    const deleteButtons = await browser.$$('button[aria-label="Delete session"]');
-    assert.equal(deleteButtons.length, 2);
-    let newChatDelete = null;
-    for (const button of deleteButtons) {
-      const titleId = await button.getAttribute("aria-describedby");
-      if (titleId && (await browser.$(`#${titleId}`).getText()) === "New chat") {
-        newChatDelete = button;
-        break;
-      }
-    }
-    assert.ok(newChatDelete, "Newly created Chat session has no delete action");
-    await newChatDelete.moveTo();
-    await newChatDelete.click();
-    dialog = await displayed('[role="dialog"]');
-    await clickButton("Delete", dialog);
-    await browser.waitUntil(
-      async () => (await browser.$$('button[aria-label="Rename session"]')).length === 1,
-      { timeout: 10_000, interval: 100, timeoutMsg: "Chat session was not deleted" },
-    );
-    await waitForText(await displayed('[aria-label="Application navigation"]'), "Release smoke chat");
     await capture("chat");
-
-    if (full) {
-      renameButtons = await browser.$$('button[aria-label="Rename session"]');
-      await renameButtons[0].click();
-      await displayed('[role="dialog"]');
-      assert.equal(
-        await browser.execute(() => document.activeElement?.id ?? ""),
-        "rename-thread-name",
-        "Rename session should focus its name field",
-      );
-      await browser.keys("Escape");
-      await browser.waitUntil(
-        async () => (await browser.$$('[role="dialog"]')).length === 0,
-        { timeout: 5_000, interval: 100, timeoutMsg: "Escape did not close Rename session" },
-      );
-      await waitForText(await displayed('[aria-label="Application navigation"]'), "Release smoke chat");
-    }
   });
 
   if (full) await step("minimum window, mobile navigation, and accessible controls", async () => {

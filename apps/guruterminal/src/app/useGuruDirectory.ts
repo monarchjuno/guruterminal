@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GuruTerminalBridge, GuruSummary } from "../types";
 import { errorMessage } from "../errors";
-import { emptyChatThread } from "./emptyChat";
+import { EMPTY_CHAT_THREAD_ID, emptyChatThread } from "./emptyChat";
 import type { ChatSessions } from "./useChatSessions";
 
 type GuruDirectoryDeps = {
@@ -75,15 +75,13 @@ export function useGuruDirectory(
         const nextThreads = workspace.threads.map((thread) =>
           chatRegistry.reconcile(thread),
         );
-        if (nextThreads.length === 0) {
-          chatRegistry.ensure(emptyChatThread(guruId));
-        }
+        chatRegistry.ensure(emptyChatThread(guruId));
         const previousActive = chat.activeThreadIdsRef.current[guruId];
         const nextActive = nextThreads.some(
           (thread) => thread.id === previousActive,
         )
           ? (previousActive ?? null)
-          : (nextThreads[0]?.id ?? null);
+          : (nextThreads[0]?.id ?? EMPTY_CHAT_THREAD_ID);
         setSelectedGuru(workspace.guru);
         setThreadsForGuru(guruId, nextThreads);
         setActiveThreadForGuru(guruId, nextActive);
