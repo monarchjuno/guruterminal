@@ -236,12 +236,12 @@ pub(super) fn validate_decision_shape(params: &Value) -> Result<(), BrokerError>
         .and_then(Value::as_str)
         .is_some_and(|value| {
             let chars = value.chars().count();
-            chars >= 1 && chars <= 180 && !value.contains('\0')
+            (1..=180).contains(&chars) && !value.contains('\0')
         })
         || object.get("summary").is_some_and(|value| {
             !value.as_str().is_some_and(|summary| {
                 let chars = summary.chars().count();
-                chars >= 1 && chars <= 400 && !summary.contains('\0')
+                (1..=400).contains(&chars) && !summary.contains('\0')
             })
         })
         || !object
