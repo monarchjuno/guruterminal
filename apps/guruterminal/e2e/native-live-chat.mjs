@@ -209,29 +209,36 @@ async function clickMenuRadio(exactText) {
 }
 
 async function visibleModelMenu() {
-  for (const menu of await browser.$$('[data-slot="dropdown-menu-content"]')) {
-    if (await isVisible(menu)) return menu;
+  for (const selector of [
+    '[aria-label="Available models"]',
+    '[data-slot="dropdown-menu-content"]',
+  ]) {
+    for (const menu of await browser.$$(selector)) {
+      if (await isVisible(menu)) return menu;
+    }
   }
   return null;
 }
 
 async function openModelMenu(modelMenu) {
   const waitForMenu = async () => {
-    try {
-      return await browser.waitUntil(async () => (await visibleModelMenu()) || false, {
-        timeout: 1_500,
-        interval: 100,
-        timeoutMsg: "Chat model menu did not become visible",
-      });
-    } catch {
-      return null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await browser.pause(100);
+      const menu = await visibleModelMenu();
+      if (menu) return menu;
     }
+    return null;
   };
+  const alreadyOpen = await waitForMenu();
+  if (alreadyOpen) return alreadyOpen;
+  await modelMenu.scrollIntoView();
   await modelMenu.click();
   let menu = await waitForMenu();
   for (const key of ["Space", "Enter"]) {
     if (menu) return menu;
     await browser.keys("Escape");
+    await browser.pause(150);
+    await modelMenu.click();
     await browser.keys(key);
     menu = await waitForMenu();
   }
@@ -240,20 +247,44 @@ async function openModelMenu(modelMenu) {
 }
 
 async function chooseLunaMax() {
-  const modelMenu = await displayed('[aria-label="Model settings for this message"]');
-  await browser.waitUntil(async () => await modelMenu.isEnabled(), {
-    timeout: 90_000,
-    interval: 150,
-    timeoutMsg: `Timed out waiting for the Chat model catalog\n${await bodyText()}`,
-  });
-  await openModelMenu(modelMenu);
-  await clickMenuRadio("GPT-5.6 Luna");
-  await clickMenuRadio("max");
-  await dismissOverlays();
+  await clickButton("Chat");
   const composer = await displayed('textarea[aria-label="Message Guru"]');
   await composer.click();
-  assert.match(await modelMenu.getText(), /GPT-5\.6 Luna/i);
-  assert.match(await modelMenu.getText(), /max/i);
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const modelMenu = await displayed('[aria-label="Model settings for this message"]');
+    await browser.waitUntil(async () => await modelMenu.isEnabled(), {
+      timeout: 90_000,
+      interval: 150,
+      timeoutMsg: `Timed out waiting for the Chat model catalog\n${await bodyText()}`,
+    });
+    try {
+      await openModelMenu(modelMenu);
+      try {
+        await clickMenuRadio("GPT-5.6 Luna");
+        await clickMenuRadio("max");
+      } catch (error) {
+        const menu = await visibleModelMenu();
+        if (!menu) throw error;
+        await browser.keys("GPT-5.6 Luna");
+        await browser.keys("Enter");
+        await browser.pause(1_100);
+        await browser.keys("max");
+        await browser.keys("Enter");
+      }
+      await dismissOverlays();
+      await composer.click();
+      const label = await modelMenu.getText();
+      assert.match(label, /GPT-5\.6 Luna/i);
+      assert.match(label, /max/i);
+      return;
+    } catch (error) {
+      lastError = error;
+      await dismissOverlays();
+      await browser.pause(400);
+    }
+  }
+  throw lastError ?? new Error("Chat model menu did not open");
 }
 
 async function assertLunaMaxSelection(context) {
@@ -377,8 +408,11 @@ async function latestWorkProgressAfter(previousCount, timeout = 60_000) {
       timeoutMsg: `Timed out waiting for the current response Work progress\n${await bodyText()}`,
     },
   );
-  const progress = await visibleWorkProgresses();
-  const latest = progress.at(-1);
+  return currentWorkProgress();
+}
+
+async function currentWorkProgress() {
+  const latest = (await visibleWorkProgresses()).at(-1);
   assert.ok(latest, "Current response Work progress disappeared");
   return latest;
 }
@@ -429,7 +463,8 @@ function exactlyOneSucceededProgressRow(rows, expected, caseName) {
     (row) =>
       row.category === expected.category &&
       row.operation === expected.operation &&
-      row.action === expected.action,
+      row.action === expected.action &&
+      (expected.target == null || row.target === expected.target),
   );
   assert.equal(
     matches.length,
@@ -611,7 +646,7 @@ async function runFinanceCoreTurn() {
 
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
   await sendPrompt(
-    "Native acceptance test. Do not use Memory, web, compute, or any connector. Follow this exact sequence: first call capability_search exactly once with query \"finance calculations\"; then, from its result, call capability_load exactly once for the Finance calculations component; then call finance_calculate exactly once with operation \"percentage_change\" and arguments start \"80\", end \"100\", and precision 2. Do not call any other tool. After all three tools succeed, reply exactly: LUNA-FINANCE-CORE-25-PERCENT-E2E: 25 percent",
+    "Native acceptance test. Do not use Memory, web, compute, or any connector. Follow this exact sequence: first call capability_search exactly once with query \"finance calculations\"; then, from its result, call capability_load exactly once for the Finance calculations component; then call finance_calculate exactly once with operations [{ id: \"pct\", operation: \"percentage_change\", arguments: { start: \"80\", end: \"100\", precision: 2 } }]. Do not call any other tool. After all three tools succeed, reply exactly: LUNA-FINANCE-CORE-25-PERCENT-E2E: 25 percent",
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
   await displayed('[aria-label="Work progress"]', 60_000);
@@ -733,7 +768,7 @@ async function runOpenbbKeylessTurn() {
 
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
   await sendPrompt(
-    `Native acceptance test. Do not read or search Memory, web, compute, or artifacts, and do not use any connector other than the named OpenBB component. Follow this exact sequence: first call capability_load exactly once with id "mcp/openbb"; then call mcp__openbb__activate_tools exactly once with tool_names ["equity_price_quote"]; then call mcp__openbb__equity_price_quote exactly once with symbol "AAPL" and provider "yfinance"; then use that quote response's exact result_ref to call evidence_create exactly once with title "${openbbEvidenceTitle}", summary "Receipt for the keyless OpenBB AAPL quote.", as_of "2026-08-24", and one claim whose text says the selected provider was yfinance and whose sole citation uses that result_ref at JSON Pointer "/structuredContent/provider". Do not call any other tool. After all four tools succeed, reply exactly: ${openbbResultToken}: <the exact quote result_ref>`,
+    `Native acceptance test. Do not read or search Memory, web, compute, or artifacts, and do not use any connector other than the named OpenBB component. Follow this exact sequence: first call capability_load exactly once with id "mcp/openbb"; then call capability_load exactly once with id "guruterminal.memory/evidence-and-decisions"; then call mcp__openbb__activate_tools exactly once with tool_names ["equity_price_quote"]; then call mcp__openbb__equity_price_quote exactly once with symbol "AAPL" and provider "yfinance"; then use that quote response's exact result_ref to call evidence_create exactly once with title "${openbbEvidenceTitle}", summary "Receipt for the keyless OpenBB AAPL quote.", as_of "2026-08-24T00:00:00Z", markdown "The selected OpenBB provider for AAPL was yfinance.", and one citation whose result_ref is that quote result_ref and whose note is "OpenBB AAPL quote". Do not call any other tool. After evidence_create succeeds, send a final assistant text reply. Do not stop on the tool result. Reply exactly: ${openbbResultToken}: <the exact quote result_ref>`,
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
   await displayed('[aria-label="Work progress"]', 60_000);
@@ -774,7 +809,7 @@ async function runOpenbbKeylessTurn() {
   const nonSystemRows = rows.filter((row) => row.category !== "system");
   assert.equal(
     nonSystemRows.length,
-    4,
+    5,
     `openbb-keyless: unexpected non-system Work progress rows: ${JSON.stringify(nonSystemRows)}`,
   );
   exactlyOneSucceededProgressRow(
@@ -784,6 +819,16 @@ async function runOpenbbKeylessTurn() {
       operation: "read",
       action: "Opened a tool",
       target: "mcp/openbb",
+    },
+    "openbb-keyless",
+  );
+  exactlyOneSucceededProgressRow(
+    nonSystemRows,
+    {
+      category: "capability",
+      operation: "read",
+      action: "Opened a tool",
+      target: "guruterminal.memory/evidence-and-decisions",
     },
     "openbb-keyless",
   );
@@ -832,7 +877,7 @@ async function runOpenbbKeylessTurn() {
   );
   await waitUntilIdle();
   await assertTurnHealthy("openbb-keyless");
-  const citation = await readOpenbbEvidenceCitation(resultRef);
+  const citation = await readOpenbbEvidenceCitation();
   acceptanceObservations.openbbKeyless = {
     component: "mcp/openbb",
     activationTool: "mcp__openbb__activate_tools",
@@ -849,7 +894,7 @@ async function runOpenbbKeylessTurn() {
   await screenshot("openbb-keyless");
 }
 
-async function readOpenbbEvidenceCitation(resultRef) {
+async function readOpenbbEvidenceCitation() {
   await dismissOverlays();
   await clickButton("Memory");
   const library = await displayed("#main-panel-library");
@@ -884,31 +929,26 @@ async function readOpenbbEvidenceCitation(resultRef) {
 
   const raw = await displayed("pre.raw-markdown", 30_000);
   const markdown = (await raw.getText()).replace(/\r\n?/gu, "\n");
-  const citations = [
-    ...markdown.matchAll(
-      /^## Claim \d+ · Citation \d+\n\n- Result: `([^`\n]+)`\n- JSON Pointer: `([^`\n]+)`\n- Selection: (?:exact value|exact excerpt)$/gmu,
-    ),
-  ];
-  assert.equal(
-    citations.length,
-    1,
-    `openbb-keyless: stored Evidence must contain one citation, got ${citations.length}`,
+  assert.match(
+    markdown,
+    /^# Sources$/mu,
+    "openbb-keyless: stored Evidence must include a readable # Sources section",
   );
-  const [, storedResultRef, pointer] = citations[0];
-  assert.equal(
-    storedResultRef,
-    resultRef,
-    "openbb-keyless: stored Evidence citation must retain the OpenBB quote result_ref",
+  assert.match(
+    markdown,
+    /yfinance/i,
+    "openbb-keyless: stored Evidence must name the selected OpenBB provider",
   );
-  assert.equal(
-    pointer,
-    "/structuredContent/provider",
-    "openbb-keyless: stored Evidence citation must select the OpenBB provider pointer",
+  assert.doesNotMatch(
+    markdown,
+    /JSON Pointer|result:[A-Za-z0-9_-]+/u,
+    "openbb-keyless: stored Evidence must not keep runtime result IDs or JSON Pointers",
   );
 
+  await search.clearValue();
   await clickButton("Chat");
   await displayed('textarea[aria-label="Message Guru"]');
-  return { resultRef: storedResultRef, pointer };
+  return { hasSources: true, mentionsProvider: true };
 }
 
 async function runWebResearchTurn() {
@@ -973,7 +1013,7 @@ async function runArtifactTurn() {
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
   const previousProgressCount = (await visibleWorkProgresses()).length;
   await sendPrompt(
-    `For a native end-to-end test, call artifact_publish exactly once and no other tool. Use mode "create", title "${artifactTitle}", and payload kind "markdown" with schema "guruterminal-markdown/1". Its Markdown must have this exact structure: first line "# ${artifactToken}"; one blank line; then the single sentence "A short sentence." After the tool succeeds, reply briefly.`,
+    `For a native end-to-end test, first call capability_load exactly once with id "guruterminal.artifacts/markdown-publishing"; then call artifact_publish exactly once and no other tool. Use mode "create", title "${artifactTitle}", and payload kind "markdown" with schema "guruterminal-markdown/1". Its Markdown must have this exact structure: first line "# ${artifactToken}"; one blank line; then the single sentence "A short sentence." After both tools succeed, reply briefly.`,
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
 
@@ -989,7 +1029,8 @@ async function runArtifactTurn() {
           throw new Error("artifact: the Chat turn failed before publishing its artifact");
         }
       }
-      return (await progress.getText()).includes("Published a Chat artifact");
+      const latest = (await visibleWorkProgresses()).at(-1);
+      return Boolean(latest && (await latest.getText()).includes("Published a Chat artifact"));
     },
     {
       timeout: FIRST_TOOL_PROGRESS_TIMEOUT_MS,
@@ -1003,8 +1044,9 @@ async function runArtifactTurn() {
 
   await browser.waitUntil(
     async () =>
-      (await progress.$("button.chat-progress-toggle").getAttribute("aria-expanded")) ===
-      "false",
+      (await (await currentWorkProgress())
+        .$("button.chat-progress-toggle")
+        .getAttribute("aria-expanded")) === "false",
     {
       timeout: 180_000,
       interval: 200,
@@ -1043,16 +1085,20 @@ async function runEvidenceChartDecisionTurn() {
   const previousComplete = (await browser.$$("article.message.assistant.complete")).length;
   await sendPrompt(
     `Run this exact native lineage test sequentially and do not use any other tool. ` +
-      `First call compute_run with JavaScript source ` +
+      `First call capability_load exactly once with id "guruterminal.compute-python/python". ` +
+      `Second, call capability_load exactly once with id "guruterminal.memory/evidence-and-decisions". ` +
+      `Third, call capability_load exactly once with id "guruterminal.charting/authoring". ` +
+      `Fourth, call compute_run with JavaScript source ` +
       '`function main() { return { rows: [{ date: "2026-08-20", value: 10 }, { date: "2026-08-21", value: 20 }, { date: "2026-08-22", value: 30 }], claim: "The final value is 30." }; }`. ' +
-      `Second, use that returned result_ref to call evidence_create once with title "${lineageEvidenceTitle}", ` +
-      `summary "Exact deterministic lineage test data.", as_of "2026-08-24", and one claim citing pointer "/data/rows/2/value". ` +
-      `Third, call chart_publish once with mode=create, title "${lineageChartTitle}", a from_result dataset using the same result_ref, ` +
+      `Fifth, use that returned result_ref to call evidence_create once with title "${lineageEvidenceTitle}", ` +
+      `summary "Exact deterministic lineage test data.", as_of "2026-08-24T00:00:00Z", markdown "The final value is 30.", ` +
+      `and one citation whose result_ref is that compute result_ref. ` +
+      `Sixth, call chart_publish once with mode=create, title "${lineageChartTitle}", a from_result dataset using the same result_ref, ` +
       `rows_pointer "/data/rows", date/date at pointer "/date", value/number at pointer "/value", and an analytic line view with x=date and y=[value]. ` +
-      `Fourth, call decision_submit once with stance=neutral, horizon="test-only", probability=0.5, ` +
+      `Seventh, call decision_submit once with title="${lineageDecisionTitle}", stance=neutral, horizon="test-only", probability=0.5, ` +
       `thesis="${lineageDecisionTitle}", evidence_ids containing only the evidence_id returned above, ` +
       `uses_ids=[], risks=["Test data only"], and invalidation_conditions=["Any tool failure"]. ` +
-      `After all four tools succeed, reply with exactly ${lineageToken}.`,
+      `After all seven tools succeed, reply with exactly ${lineageToken}.`,
   );
   await displayed('button[aria-label="Stop response"]', 15_000);
 
@@ -1177,6 +1223,8 @@ async function assertMemoryTitles(caseName) {
   await dismissOverlays();
   await clickButton("Memory");
   const panel = await displayed("#main-panel-library");
+  const search = await displayed('input[placeholder="Search memory"]');
+  await search.clearValue();
   for (const title of [wikiTitle, lensTitle, lineageEvidenceTitle, lineageDecisionTitle]) {
     await waitForText(panel, title, 30_000);
     observeToken(title);
@@ -1413,6 +1461,7 @@ try {
     await connectExistingPiProfile();
     await clickButton("Chat");
     await (await displayed('button[aria-label="New session for Luna Native Agent"]')).click();
+    await displayed('textarea[aria-label="Message Guru"]');
     await chooseLunaMax();
     await runCompletedTurn();
   }

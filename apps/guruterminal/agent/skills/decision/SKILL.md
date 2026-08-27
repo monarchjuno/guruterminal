@@ -24,9 +24,10 @@ State the entity, cutoff, horizon, constraints, choice, calibrated confidence,
 strongest counterevidence, risks, and measurable invalidation conditions.
 Separate observed evidence, calculations, assumptions, and Memory. Abstain when
 the available current-turn results cannot support a judgment. Create Evidence
-for the decisive claims with `evidence_create`, selecting exact values from
-delivered `result_ref` payloads. A non-abstain `decision_submit` accepts only
-Evidence IDs created in this turn. An abstain submission may omit Evidence but
+for the decisive claims with `evidence_create`, writing a readable markdown
+body and citing the delivered `result_ref` values actually used. A non-abstain
+`decision_submit` accepts only Evidence IDs created in this turn. An abstain
+submission may omit Evidence but
 must preserve its reason and uncertainty. List only exact-read Wiki or Lens IDs
 in `uses_ids`; a prior Decision is context, not fresh evidence.
 

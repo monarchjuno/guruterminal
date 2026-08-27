@@ -85,11 +85,12 @@ function financeCalculateBranch(operation, argumentsSchema) {
   };
 }
 
-const FINANCE_CALCULATE_SCHEMA = {
+const FINANCE_CALCULATE_OPERATION_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["operation", "arguments"],
+  required: ["id", "operation", "arguments"],
   properties: {
+    id: { type: "string", minLength: 1, maxLength: 64 },
     operation: { type: "string", enum: [...FINANCE_CALCULATE_OPERATIONS] },
     arguments: { type: "object" },
   },
@@ -330,6 +331,19 @@ const FINANCE_CALCULATE_SCHEMA = {
     ),
   ],
 };
+const FINANCE_CALCULATE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["operations"],
+  properties: {
+    operations: {
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: FINANCE_CALCULATE_OPERATION_SCHEMA,
+    },
+  },
+};
 const registeredToolCards = new Map();
 
 function loadHostContext() {
@@ -512,7 +526,10 @@ function compactHostContext(parsed) {
 
 function textResult(value) {
   return {
-    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+    // The structured value remains available in details for the UI. Keep the
+    // model-facing representation compact so every tool round does not pay
+    // repeated whitespace tokens for the same JSON payload.
+    content: [{ type: "text", text: JSON.stringify(value) }],
     details: value,
   };
 }
@@ -655,7 +672,14 @@ export default function guruTerminalExtension(originalPi) {
 
   const pi = {
     registerTool(tool) {
-      if (hostContext.allowedTools.has(tool.name)) originalPi.registerTool(tool);
+      if (!hostContext.allowedTools.has(tool.name)) return;
+      registeredToolCards.set(tool.name, {
+        name: tool.name,
+        label: tool.label,
+        description: tool.description,
+        parameters: tool.parameters,
+      });
+      originalPi.registerTool(tool);
     },
   };
   registerWorkspaceTools(pi, skillFiles);
@@ -676,16 +700,20 @@ export default function guruTerminalExtension(originalPi) {
     parameters: {
       type: "object",
       additionalProperties: false,
+      required: ["query"],
       properties: {
-        query: { type: "string", maxLength: 200 },
+        query: { type: "string", minLength: 1, maxLength: 200 },
       },
     },
     async execute(_toolCallId, input) {
-      const terms = (input.query ?? "")
+      const query = typeof input.query === "string" ? input.query.trim() : "";
+      if (!query) throw new Error("Capability search query must not be empty");
+      const terms = query
         .toLocaleLowerCase("en-US")
         .split(/\s+/u)
         .filter(Boolean);
       const matches = [...hostContext.components.values()]
+        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
         .filter((component) => {
           const haystack = `${component.id} ${component.name} ${component.description} ${(component.provider_ids ?? []).join(" ")} ${component.tool_names.join(" ")}`.toLocaleLowerCase("en-US");
           return terms.every((term) => haystack.includes(term));
@@ -953,7 +981,7 @@ export default function guruTerminalExtension(originalPi) {
     pi,
     "finance_filings",
     "Search or read filings",
-    `Search or read official OpenDART filings through the retained native connector. SEC filings are exposed through OpenBB after loading the SEC Marketplace capability. Search output is discovery data; use evidence_create with exact values from the selected read result when a durable claim is needed. Optional as_of is a YYYY-MM-DD cutoff. ${FINANCE_ATTR.filings}`,
+    `Search or read official OpenDART filings through the retained native connector. SEC filings are exposed through OpenBB after loading the SEC Marketplace capability. Search output is discovery data; use evidence_create with a readable markdown body and the selected read result_ref when a durable claim is needed. Optional as_of is a YYYY-MM-DD cutoff. ${FINANCE_ATTR.filings}`,
     {
       type: "object",
       oneOf: [
@@ -1016,7 +1044,7 @@ export default function guruTerminalExtension(originalPi) {
     pi,
     "finance_calculate",
     "Calculate finance values",
-    `Run an allowlisted deterministic calculation and return its explicit inputs, formula, units, and provenance. Prefer this over compute_run for these operations. Supply every numeric series or scalar directly; finance_calculate does not infer fields from provider results. Rates are decimals (0.10 means 10%). Each operation accepts only its own argument keys. Extra keys, grouped decimals, and missing required inputs are rejected with the offending field rather than defaulted. ${FINANCE_ATTR.calculate}`,
+    `Run 1-64 allowlisted deterministic calculations in one ordered batch and return a per-item success or error with explicit inputs, formula, units, and provenance. Batch independent calculations together instead of calling this tool repeatedly. Prefer this over compute_run for these operations. Give every operation a short id and supply every numeric series or scalar directly; finance_calculate does not infer fields from provider results. Rates are decimals (0.10 means 10%). Each operation accepts only its own argument keys. Extra keys, grouped decimals, and missing required inputs are rejected with the offending field rather than defaulted. ${FINANCE_ATTR.calculate}`,
     FINANCE_CALCULATE_SCHEMA,
     "finance.calculate",
   );
@@ -1423,11 +1451,12 @@ export default function guruTerminalExtension(originalPi) {
     pi,
     "decision_submit",
     "Submit a sealed decision",
-    "Submit only an explicit user-requested judgment. evidence_ids must name canonical Evidence created in this turn; uses_ids must name exact-read Wiki or Lens records. Only stance=abstain may omit evidence. Rust persists the result independently of Update memory.",
+    "Submit only an explicit user-requested judgment. title names the Decision; summary is optional. evidence_ids must name canonical Evidence created in this turn; uses_ids must name exact-read Wiki or Lens records. Only stance=abstain may omit evidence. Rust persists the result independently of Update memory.",
     {
       type: "object",
       additionalProperties: false,
       required: [
+        "title",
         "stance",
         "horizon",
         "probability",
@@ -1438,6 +1467,8 @@ export default function guruTerminalExtension(originalPi) {
         "invalidation_conditions",
       ],
       properties: {
+        title: { type: "string", minLength: 1, maxLength: 180 },
+        summary: { type: "string", minLength: 1, maxLength: 400 },
         stance: { type: "string", enum: ["positive", "neutral", "negative", "abstain"] },
         horizon: { type: "string", minLength: 1 },
         probability: { type: "number", minimum: 0, maximum: 1 },
@@ -1454,41 +1485,42 @@ export default function guruTerminalExtension(originalPi) {
   register(
     pi,
     "evidence_create",
-    "Create Evidence from exact result data",
-    "Create one immutable Evidence record. Each citation selects an exact value from a successfully delivered current-turn result using JSON Pointer; excerpt, when supplied, must be an exact substring. Rust copies the selected data and attaches the unforgeable result receipt.",
+    "Create Evidence from current-turn results",
+    "Create one immutable Evidence record. Write a human-readable markdown body that states the numbers, units, period, and source in prose. as_of must be RFC3339 with time and timezone (for example 2026-08-27T15:30:00+09:00), using the information cutoff or the retrieval time. citations name the delivered current-turn result_ref values actually used; Rust verifies those receipts and writes a readable # Sources section. Do not put result IDs, JSON Pointers, or raw JSON snapshots in the body.",
     {
       type: "object",
       additionalProperties: false,
-      required: ["title", "summary", "as_of", "claims"],
+      required: ["title", "summary", "as_of", "markdown", "citations"],
       properties: {
         title: { type: "string", minLength: 1, maxLength: 180 },
         summary: { type: "string", minLength: 1, maxLength: 400 },
-        as_of: { type: "string", minLength: 10, maxLength: 128 },
-        claims: {
+        as_of: {
+          type: "string",
+          minLength: 20,
+          maxLength: 128,
+          description:
+            "RFC3339 with time and timezone, for example 2026-08-27T15:30:00+09:00",
+        },
+        markdown: { type: "string", minLength: 1, maxLength: 16384 },
+        source: { type: "string", minLength: 1, maxLength: 2048 },
+        period: { type: "string", minLength: 1, maxLength: 64 },
+        entities: {
+          type: "array",
+          maxItems: 16,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 128 },
+        },
+        citations: {
           type: "array",
           minItems: 1,
           maxItems: 16,
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["text", "citations"],
+            required: ["result_ref"],
             properties: {
-              text: { type: "string", minLength: 1, maxLength: 800 },
-              citations: {
-                type: "array",
-                minItems: 1,
-                maxItems: 8,
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["result_ref", "pointer"],
-                  properties: {
-                    result_ref: { type: "string", minLength: 1, maxLength: 128 },
-                    pointer: { type: "string", maxLength: 2048 },
-                    excerpt: { type: "string", minLength: 1, maxLength: 8192 },
-                  },
-                },
-              },
+              result_ref: { type: "string", minLength: 1, maxLength: 128 },
+              note: { type: "string", minLength: 1, maxLength: 180 },
             },
           },
         },

@@ -16,8 +16,8 @@ Use memory and Update memory are on for this turn.
    are not record authority. Treat a same-kind active title or alias collision
    as the same page: exact-read its canonical ID and revise it instead of
    creating a second record.
-2. Use `evidence_create` for every factual change, selecting exact values from
-   delivered current-turn `result_ref` payloads with JSON Pointer.
+2. Use `evidence_create` for every factual change, writing a readable markdown
+   body and citing the delivered current-turn `result_ref` values actually used.
 3. Propose a complete record with `memory_patch_propose`, a rationale, and the
    staged Evidence IDs or exact-read Memory `source_ids` it uses. Frontmatter
    must include non-empty `id`, `title`, `summary`, and `as_of` in RFC3339

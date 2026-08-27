@@ -29,7 +29,7 @@ use crate::{
     finance::{FinanceLaunchConfig, FinanceWorker},
     guru_root::BoundGuruRoot,
     hashing::sha256,
-    mcp_pool::{McpProcessPool, TurnMcpServer},
+    mcp_pool::McpProcessPool,
     store::GuruTerminalStore,
 };
 
@@ -103,7 +103,7 @@ pub(super) struct ToolCapture {
     pub(super) compute: Arc<crate::compute::TurnComputeSession>,
     pub(super) web_search_policy: crate::web::WebSearchPolicy,
     pub(super) search_cancel: crate::web::SearchCancel,
-    mcp_sessions: Mutex<BTreeMap<String, TurnMcpServer>>,
+    mcp_sessions: Mutex<mcp_host::McpTurnSessions>,
     pub(super) mcp_scratch_root: Option<PathBuf>,
     pub(super) mcp_pool: Option<McpProcessPool>,
 }
@@ -132,6 +132,7 @@ pub(crate) struct RunResultProducer {
 pub(crate) struct RunResult {
     pub(crate) result_ref: String,
     pub(crate) producer: RunResultProducer,
+    pub(crate) origin: Option<String>,
     pub(crate) request_digest: String,
     pub(crate) response_digest: String,
     pub(crate) retrieved_at: String,
@@ -144,6 +145,7 @@ pub(crate) struct RunResult {
 pub(crate) struct RunResultReceipt {
     pub(crate) result_ref: String,
     pub(crate) producer: RunResultProducer,
+    pub(crate) origin: Option<String>,
     pub(crate) request_digest: String,
     pub(crate) response_digest: String,
     pub(crate) retrieved_at: String,
@@ -156,6 +158,7 @@ impl RunResult {
         RunResultReceipt {
             result_ref: self.result_ref.clone(),
             producer: self.producer.clone(),
+            origin: self.origin.clone(),
             request_digest: self.request_digest.clone(),
             response_digest: self.response_digest.clone(),
             retrieved_at: self.retrieved_at.clone(),
@@ -203,16 +206,8 @@ impl RunResultRegistry {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct EvidenceCitation {
     pub(super) result_ref: String,
-    pub(super) pointer: String,
-    pub(super) excerpt: Option<String>,
-    pub(super) selected: Value,
+    pub(super) note: Option<String>,
     pub(super) receipt: RunResultReceipt,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct EvidenceClaim {
-    pub(super) text: String,
-    pub(super) citations: Vec<EvidenceCitation>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -221,7 +216,11 @@ pub(super) struct StagedEvidence {
     pub(super) title: String,
     pub(super) summary: String,
     pub(super) as_of: String,
-    pub(super) claims: Vec<EvidenceClaim>,
+    pub(super) markdown: String,
+    pub(super) source: Option<String>,
+    pub(super) period: Option<String>,
+    pub(super) entities: Vec<String>,
+    pub(super) citations: Vec<EvidenceCitation>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,16 +239,6 @@ impl ToolCapture {
 
     pub(crate) async fn run_result(&self, result_ref: &str) -> Option<RunResult> {
         self.run_results.lock().await.get(result_ref).cloned()
-    }
-
-    pub(crate) async fn run_result_selection(
-        &self,
-        result_ref: &str,
-        pointer: &str,
-    ) -> Option<(RunResultReceipt, Option<Value>)> {
-        let registry = self.run_results.lock().await;
-        let result = registry.get(result_ref)?;
-        Some((result.receipt(), result.payload.pointer(pointer).cloned()))
     }
 
     pub(crate) async fn stage_run_result(
@@ -285,6 +274,7 @@ impl ToolCapture {
         let result = RunResult {
             result_ref: result_ref.clone(),
             producer,
+            origin: result_origin(request),
             request_digest: sha256(&request_bytes),
             response_digest: sha256(&response_bytes),
             retrieved_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -435,6 +425,7 @@ fn run_result_bytes(result: &RunResult) -> Result<usize, BrokerError> {
                 + result.producer.runtime_id.len()
                 + result.producer.tool_name.len()
                 + result.producer.provider.as_deref().map_or(0, str::len)
+                + result.origin.as_deref().map_or(0, str::len)
                 + result.request_digest.len()
                 + result.response_digest.len()
                 + result.retrieved_at.len()
@@ -446,6 +437,20 @@ fn run_result_bytes(result: &RunResult) -> Result<usize, BrokerError> {
                     .sum::<usize>()
         })
         .map_err(|_| BrokerError::Execution("tool result could not be captured".into()))
+}
+
+fn result_origin(request: &Value) -> Option<String> {
+    const KEYS: [&str; 5] = ["url", "symbol", "ticker", "query", "uri"];
+    for key in KEYS {
+        if let Some(value) = request
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 2_048 && !value.contains('\0'))
+        {
+            return Some(value.to_owned());
+        }
+    }
+    request.get("arguments").and_then(result_origin)
 }
 
 fn result_warnings(payload: &Value) -> Vec<String> {

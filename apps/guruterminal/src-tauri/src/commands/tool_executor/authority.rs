@@ -6,110 +6,62 @@ impl AppToolExecutor {
         params: Value,
         delivery_id: &str,
     ) -> Result<Value, BrokerError> {
-        let object = exact_object(&params, &["title", "summary", "as_of", "claims"], &[])?;
+        let object = exact_object(
+            &params,
+            &["title", "summary", "as_of", "markdown", "citations"],
+            &["source", "period", "entities"],
+        )?;
         let title = bounded_text(object.get("title"), 1, 180)?;
         let summary = bounded_text(object.get("summary"), 1, 400)?;
-        let as_of = bounded_text(object.get("as_of"), 10, 128)?;
-        if chrono::NaiveDate::parse_from_str(&as_of, "%Y-%m-%d").is_err()
-            && DateTime::parse_from_rfc3339(&as_of).is_err()
-        {
+        let as_of = bounded_text(object.get("as_of"), 20, 128)?;
+        if DateTime::parse_from_rfc3339(&as_of).is_err() {
             return Err(BrokerError::Malformed);
         }
-        let values = object
-            .get("claims")
+        let markdown = bounded_text(object.get("markdown"), 1, MAX_EVIDENCE_MARKDOWN_BYTES)?;
+        if evidence_markdown_has_frontmatter_fence(&markdown) {
+            return Err(BrokerError::Execution(
+                "evidence markdown must not include a frontmatter fence".into(),
+            ));
+        }
+        if evidence_markdown_has_sources_heading(&markdown) {
+            return Err(BrokerError::Execution(
+                "evidence markdown must not include a # Sources heading".into(),
+            ));
+        }
+        let source = optional_bounded_text(object.get("source"), 1, 2048)?;
+        let period = optional_bounded_text(object.get("period"), 1, 64)?;
+        let entities = optional_unique_strings(object.get("entities"), 16, 128)?;
+        let citation_values = object
+            .get("citations")
             .and_then(Value::as_array)
-            .filter(|values| !values.is_empty() && values.len() <= MAX_EVIDENCE_CLAIMS)
+            .filter(|items| !items.is_empty() && items.len() <= MAX_EVIDENCE_CITATIONS)
             .ok_or(BrokerError::Malformed)?;
-        let mut claims = Vec::with_capacity(values.len());
-        let mut selected_bytes = 0_usize;
-        for value in values {
-            let claim = exact_object(value, &["text", "citations"], &[])?;
-            let text = bounded_text(claim.get("text"), 1, 800)?;
-            let citation_values = claim
-                .get("citations")
-                .and_then(Value::as_array)
-                .filter(|items| !items.is_empty() && items.len() <= MAX_EVIDENCE_CITATIONS)
-                .ok_or(BrokerError::Malformed)?;
-            let mut citations = Vec::with_capacity(citation_values.len());
-            let mut unique = BTreeSet::new();
-            for value in citation_values {
-                let citation = exact_object(value, &["result_ref", "pointer"], &["excerpt"])?;
-                let result_ref = bounded_text(citation.get("result_ref"), 1, 128)?;
-                let pointer = citation
-                    .get("pointer")
-                    .and_then(Value::as_str)
-                    .filter(|pointer| {
-                        crate::json_pointer::valid_json_pointer(
-                            pointer,
-                            MAX_EVIDENCE_POINTER_BYTES,
-                            true,
-                        )
-                    })
-                    .map(str::to_owned)
-                    .ok_or(BrokerError::Malformed)?;
-                let excerpt = match citation.get("excerpt") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(excerpt))
-                        if !excerpt.is_empty()
-                            && excerpt.len() <= MAX_EVIDENCE_EXCERPT_BYTES
-                            && !excerpt.contains('\0') =>
-                    {
-                        Some(excerpt.clone())
-                    }
-                    _ => return Err(BrokerError::Malformed),
-                };
-                if !unique.insert((result_ref.clone(), pointer.clone(), excerpt.clone())) {
-                    return Err(BrokerError::Execution(
-                        "evidence citations must be unique within a claim".into(),
-                    ));
-                }
-                let (receipt, pointed) = self
-                    .capture
-                    .run_result_selection(&result_ref, &pointer)
-                    .await
-                    .ok_or_else(|| {
-                        BrokerError::Execution(
-                            "evidence result_ref must name a delivered result from this turn"
-                                .into(),
-                        )
-                    })?;
-                let pointed = pointed.ok_or_else(|| {
+        let mut citations = Vec::with_capacity(citation_values.len());
+        let mut unique = BTreeSet::new();
+        for value in citation_values {
+            let citation = exact_object(value, &["result_ref"], &["note"])?;
+            let result_ref = bounded_text(citation.get("result_ref"), 1, 128)?;
+            let note = optional_bounded_text(citation.get("note"), 1, 180)?;
+            if !unique.insert(result_ref.clone()) {
+                return Err(BrokerError::Execution(
+                    "evidence citations must name unique delivered results".into(),
+                ));
+            }
+            let receipt = self
+                .capture
+                .run_result(&result_ref)
+                .await
+                .map(|result| result.receipt())
+                .ok_or_else(|| {
                     BrokerError::Execution(
-                        "evidence citation pointer did not resolve in the selected result".into(),
+                        "evidence result_ref must name a delivered result from this turn".into(),
                     )
                 })?;
-                let selected = match excerpt.as_deref() {
-                    Some(excerpt) => pointed
-                        .as_str()
-                        .filter(|value| value.contains(excerpt))
-                        .map(|_| Value::String(excerpt.to_owned()))
-                        .ok_or_else(|| {
-                            BrokerError::Execution(
-                                "evidence excerpt must be an exact substring of the selected value"
-                                    .into(),
-                            )
-                        })?,
-                    None => pointed,
-                };
-                selected_bytes = selected_bytes
-                    .checked_add(
-                        serde_json::to_vec(&selected)
-                            .map_err(|_| BrokerError::Malformed)?
-                            .len(),
-                    )
-                    .filter(|bytes| *bytes <= MAX_EVIDENCE_SELECTED_BYTES)
-                    .ok_or_else(|| {
-                        BrokerError::Execution("evidence selected data is too large".into())
-                    })?;
-                citations.push(EvidenceCitation {
-                    result_ref,
-                    pointer,
-                    excerpt,
-                    selected,
-                    receipt,
-                });
-            }
-            claims.push(EvidenceClaim { text, citations });
+            citations.push(EvidenceCitation {
+                result_ref,
+                note,
+                receipt,
+            });
         }
         let evidence_id = format!("evidence:chat/{}", uuid::Uuid::new_v4().simple());
         let staged = StagedEvidence {
@@ -117,7 +69,11 @@ impl AppToolExecutor {
             title,
             summary,
             as_of,
-            claims,
+            markdown,
+            source,
+            period,
+            entities,
+            citations,
         };
         let committed = self.capture.staged_evidence.lock().await;
         let mut pending = self.capture.pending_deliveries.lock().await;
@@ -494,11 +450,8 @@ fn memory_authority_rank(memory: &MemoryRefSnapshot) -> u8 {
 }
 
 const MAX_EVIDENCE_RECORDS: usize = 3;
-const MAX_EVIDENCE_CLAIMS: usize = 16;
-const MAX_EVIDENCE_CITATIONS: usize = 8;
-const MAX_EVIDENCE_POINTER_BYTES: usize = 2 * 1024;
-const MAX_EVIDENCE_EXCERPT_BYTES: usize = 8 * 1024;
-const MAX_EVIDENCE_SELECTED_BYTES: usize = 256 * 1024;
+const MAX_EVIDENCE_CITATIONS: usize = 16;
+const MAX_EVIDENCE_MARKDOWN_BYTES: usize = 16 * 1024;
 
 fn bounded_text(value: Option<&Value>, min: usize, max: usize) -> Result<String, BrokerError> {
     value
@@ -510,4 +463,53 @@ fn bounded_text(value: Option<&Value>, min: usize, max: usize) -> Result<String,
         })
         .map(str::to_owned)
         .ok_or(BrokerError::Malformed)
+}
+
+fn optional_bounded_text(
+    value: Option<&Value>,
+    min: usize,
+    max: usize,
+) -> Result<Option<String>, BrokerError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => bounded_text(value, min, max).map(Some),
+    }
+}
+
+fn optional_unique_strings(
+    value: Option<&Value>,
+    max_items: usize,
+    max_chars: usize,
+) -> Result<Vec<String>, BrokerError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .filter(|items| items.len() <= max_items)
+        .ok_or(BrokerError::Malformed)?;
+    let mut unique = BTreeSet::new();
+    let mut values = Vec::with_capacity(items.len());
+    for item in items {
+        let text = bounded_text(Some(item), 1, max_chars)?;
+        if !unique.insert(text.clone()) {
+            return Err(BrokerError::Malformed);
+        }
+        values.push(text);
+    }
+    Ok(values)
+}
+
+fn evidence_markdown_has_frontmatter_fence(markdown: &str) -> bool {
+    markdown.lines().any(|line| line.trim() == "---")
+}
+
+fn evidence_markdown_has_sources_heading(markdown: &str) -> bool {
+    markdown.lines().any(|line| {
+        let hashes = line.chars().take_while(|character| character == &'#').count();
+        hashes > 0
+            && hashes <= 6
+            && line.as_bytes().get(hashes) == Some(&b' ')
+            && line[hashes + 1..].trim().eq_ignore_ascii_case("sources")
+    })
 }

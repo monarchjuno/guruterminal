@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
@@ -68,20 +68,10 @@ fn markdown_inline(value: &str) -> String {
         .join(" ")
 }
 
-fn markdown_code(value: &str) -> String {
-    format!("`{}`", markdown_inline(value).replace('`', "'"))
-}
-
 fn as_of_or_now(value: Option<&str>, timestamp: i64) -> String {
     value
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.to_rfc3339_opts(SecondsFormat::Secs, true))
-        .or_else(|| {
-            value
-                .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
-                .and_then(|date| date.and_hms_opt(0, 0, 0))
-                .map(|value| value.and_utc().to_rfc3339_opts(SecondsFormat::Secs, true))
-        })
         .unwrap_or_else(|| {
             DateTime::<Utc>::from_timestamp_millis(timestamp)
                 .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
@@ -350,108 +340,66 @@ fn allocate_slug_id(
 }
 
 fn evidence_markdown(evidence: &tool_executor::StagedEvidence, timestamp: i64) -> String {
-    let claims = evidence
-        .claims
-        .iter()
-        .enumerate()
-        .map(|(claim_index, claim)| {
-            let citations = claim
-                .citations
-                .iter()
-                .map(|citation| {
-                    format!(
-                        "{} {}",
-                        markdown_code(&citation.result_ref),
-                        markdown_code(&citation.pointer)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "{}. {}\n   - Citations: {}",
-                claim_index + 1,
-                markdown_inline(&claim.text),
-                citations,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let data = evidence
-        .claims
-        .iter()
-        .enumerate()
-        .flat_map(|(claim_index, claim)| {
-            claim
-                .citations
-                .iter()
-                .enumerate()
-                .map(move |(citation_index, citation)| {
-                    let encoded = serde_json::to_string_pretty(&citation.selected)
-                        .unwrap_or_else(|_| "null".into());
-                    let indented = encoded
-                        .lines()
-                        .map(|line| format!("    {line}"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!(
-                        "## Claim {} · Citation {}\n\n- Result: {}\n- JSON Pointer: {}\n- Selection: {}\n\n{}",
-                        claim_index + 1,
-                        citation_index + 1,
-                        markdown_code(&citation.result_ref),
-                        markdown_code(&citation.pointer),
-                        if citation.excerpt.is_some() { "exact excerpt" } else { "exact value" },
-                        indented,
-                    )
-                })
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut receipts = BTreeMap::new();
-    for claim in &evidence.claims {
-        for citation in &claim.citations {
-            receipts
-                .entry(citation.result_ref.as_str())
-                .or_insert(&citation.receipt);
-        }
-    }
-    let sources = receipts
-        .values()
-        .map(|receipt| {
-            let provider = receipt.producer.provider.as_deref().unwrap_or("unspecified");
-            let warnings = if receipt.warnings.is_empty() {
-                "none".into()
-            } else {
-                receipt
-                    .warnings
-                    .iter()
-                    .map(|warning| markdown_inline(warning))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            };
-            format!(
-                "- {}\n  - Runtime: {}\n  - Tool: {}\n  - Provider: {}\n  - Retrieved: {}\n  - Request SHA-256: {}\n  - Response SHA-256: {}\n  - Warnings: {}",
-                markdown_code(&receipt.result_ref),
-                markdown_code(&receipt.producer.runtime_id),
-                markdown_code(&receipt.producer.tool_name),
-                markdown_code(provider),
-                receipt.retrieved_at,
-                markdown_code(&receipt.request_digest),
-                markdown_code(&receipt.response_digest),
-                warnings,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "---\nid: {}\ntitle: {}\nsummary: {}\nas_of: {}\n---\n\n# Claims\n\n{}\n\n# Data\n\n{}\n\n# Sources\n\n{}\n",
+    let mut frontmatter = format!(
+        "---\nid: {}\ntitle: {}\nsummary: {}\nas_of: {}\n",
         evidence.evidence_id,
         yaml_scalar(&evidence.title),
         yaml_scalar(&evidence.summary),
         as_of_or_now(Some(&evidence.as_of), timestamp),
-        claims,
-        data,
-        sources,
+    );
+    if let Some(source) = &evidence.source {
+        frontmatter.push_str(&format!("source: {}\n", yaml_scalar(source)));
+    }
+    if let Some(period) = &evidence.period {
+        frontmatter.push_str(&format!("period: {}\n", yaml_scalar(period)));
+    }
+    if !evidence.entities.is_empty() {
+        frontmatter.push_str("entities:\n");
+        for entity in &evidence.entities {
+            frontmatter.push_str(&format!("  - {}\n", yaml_scalar(entity)));
+        }
+    }
+    frontmatter.push_str("---\n");
+    let sources = evidence
+        .citations
+        .iter()
+        .map(evidence_source_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{frontmatter}\n{}\n\n# Sources\n\n{sources}\n",
+        evidence.markdown.trim()
     )
+}
+
+fn evidence_source_line(citation: &tool_executor::EvidenceCitation) -> String {
+    let receipt = &citation.receipt;
+    let label = citation
+        .note
+        .as_deref()
+        .or(receipt.origin.as_deref())
+        .unwrap_or(receipt.producer.tool_name.as_str());
+    let retrieved = DateTime::parse_from_rfc3339(&receipt.retrieved_at)
+        .map(|value| value.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_else(|_| markdown_inline(&receipt.retrieved_at));
+    let provider = receipt
+        .producer
+        .provider
+        .as_deref()
+        .filter(|value| !value.is_empty());
+    let via = match provider {
+        Some(provider) => format!(
+            "{} via {}",
+            markdown_inline(&receipt.producer.tool_name),
+            markdown_inline(provider)
+        ),
+        None => markdown_inline(&receipt.producer.tool_name),
+    };
+    if citation.note.is_none() && receipt.origin.is_none() {
+        format!("- {via}, retrieved {retrieved}")
+    } else {
+        format!("- {} — {via}, retrieved {retrieved}", markdown_inline(label))
+    }
 }
 
 fn decision_title(thesis: &str, stance: &str) -> String {
@@ -529,10 +477,34 @@ fn decision_markdown(
         .map(|value| format!("- {value}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let title = decision
+        .payload
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| decision_title(thesis, stance));
+    let summary = decision
+        .payload
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| thesis.chars().take(240).collect::<String>());
+    let probability_display = {
+        let percent = probability * 100.0;
+        if (percent - percent.round()).abs() < 1e-6 {
+            format!("{:.0}%", percent)
+        } else {
+            format!("{:.1}%", percent)
+        }
+    };
     format!(
-        "---\nid: {record_id}\ntitle: {}\nsummary: {}\nas_of: {}\n{}{}---\n\n# Decision\n\n**Stance:** {stance}\n\n**Horizon:** {horizon}\n\n**Probability:** {probability:.4}\n\n{thesis}\n\n# Material risks\n\n{}\n\n# Invalidation conditions\n\n{}\n",
-        yaml_scalar(&decision_title(thesis, stance)),
-        yaml_scalar(&thesis.chars().take(240).collect::<String>()),
+        "---\nid: {record_id}\ntitle: {}\nsummary: {}\nas_of: {}\n{}{}---\n\n# Decision\n\n**Stance:** {stance}\n\n**Horizon:** {horizon}\n\n**Probability:** {probability_display}\n\n{thesis}\n\n# Material risks\n\n{}\n\n# Invalidation conditions\n\n{}\n",
+        yaml_scalar(&title),
+        yaml_scalar(&summary),
         as_of_or_now(None, timestamp),
         list("uses", uses),
         list("supports", supports),
@@ -781,8 +753,7 @@ pub(super) async fn apply_chat_memory_update_with_registered_finalize<T>(
     };
     let basis = staged_evidence
         .iter()
-        .flat_map(|evidence| evidence.claims.iter())
-        .flat_map(|claim| claim.citations.iter())
+        .flat_map(|evidence| evidence.citations.iter())
         .map(|citation| {
             citation
                 .receipt
@@ -874,41 +845,40 @@ mod tests {
                 tool_name: "web_fetch".into(),
                 provider: Some("example.test".into()),
             },
+            origin: Some("https://example.test/tsmc".into()),
             request_digest: "a".repeat(64),
             response_digest: "b".repeat(64),
-            retrieved_at: "2026-08-13T00:00:00Z".into(),
+            retrieved_at: "2026-08-13T15:30:00Z".into(),
             payload: serde_json::json!({"data": {"capacity": 91}}),
             warnings: Vec::new(),
             upstream_result_refs: Vec::new(),
         }
     }
 
-    fn staged_evidence(text: &str, selected: Value) -> tool_executor::StagedEvidence {
+    fn staged_evidence(markdown: &str) -> tool_executor::StagedEvidence {
         let result = web_result();
         let receipt = result.receipt();
         tool_executor::StagedEvidence {
             evidence_id: "evidence:chat/one".into(),
             title: "TSMC 3nm capacity".into(),
             summary: "Capacity and yield claims from the latest filing.".into(),
-            as_of: "2026-08-13".into(),
-            claims: vec![tool_executor::EvidenceClaim {
-                text: text.into(),
-                citations: vec![tool_executor::EvidenceCitation {
-                    result_ref: receipt.result_ref.clone(),
-                    pointer: "/data/capacity".into(),
-                    excerpt: None,
-                    selected,
-                    receipt,
-                }],
+            as_of: "2026-08-13T15:30:00Z".into(),
+            markdown: markdown.into(),
+            source: Some("https://example.test/tsmc".into()),
+            period: Some("2026-Q2".into()),
+            entities: vec!["ticker:TSM".into()],
+            citations: vec![tool_executor::EvidenceCitation {
+                result_ref: receipt.result_ref.clone(),
+                note: Some("TSMC 3nm filing".into()),
+                receipt,
             }],
         }
     }
 
     #[test]
-    fn evidence_contains_exact_data_and_host_receipt() {
+    fn evidence_contains_readable_body_and_sources() {
         let evidence = staged_evidence(
-            "3nm utilization rose on CoWoS tightness.",
-            serde_json::json!(91),
+            "3nm utilization rose to 91% on CoWoS tightness.",
         );
         let markdown = evidence_markdown(&evidence, 0);
         let frontmatter = markdown
@@ -918,14 +888,49 @@ mod tests {
             .unwrap()
             .0;
         assert!(frontmatter.contains("id: evidence:chat/one"));
-        assert!(markdown.contains("# Claims"));
-        assert!(markdown.contains("# Data"));
+        assert!(frontmatter.contains("as_of: 2026-08-13T15:30:00Z"));
+        assert!(frontmatter.contains("source:"));
+        assert!(frontmatter.contains("period:"));
+        assert!(frontmatter.contains("ticker:TSM"));
+        assert!(markdown.contains("3nm utilization rose to 91% on CoWoS tightness."));
         assert!(markdown.contains("# Sources"));
-        assert!(markdown.contains("result:one"));
-        assert!(markdown.contains("/data/capacity"));
-        assert!(markdown.contains("    91"));
-        assert!(markdown.contains("Request SHA-256"));
-        assert!(markdown.contains(&"a".repeat(64)));
+        assert!(markdown.contains("TSMC 3nm filing — web_fetch via example.test, retrieved 2026-08-13T15:30:00Z"));
+        assert!(!markdown.contains("# Claims"));
+        assert!(!markdown.contains("# Data"));
+        assert!(!markdown.contains("result:one"));
+        assert!(!markdown.contains("JSON Pointer"));
+        assert!(!markdown.contains("Request SHA-256"));
+    }
+
+    #[test]
+    fn decision_markdown_uses_title_and_percent_probability() {
+        let decision = ChatDecision {
+            payload: serde_json::json!({
+                "title": "Hold TSMC",
+                "summary": "Packaging remains the binding constraint.",
+                "stance": "neutral",
+                "horizon": "12 months",
+                "probability": 0.65,
+                "thesis": "Packaging tightness still caps incremental supply.",
+                "evidence_ids": ["evidence:chat/one"],
+                "uses_ids": [],
+                "risks": ["Yield recovery"],
+                "invalidation_conditions": ["CoWoS supply normalizes"]
+            }),
+            digest: "d".repeat(64),
+            sealed_at_ms: 1,
+        };
+        let markdown = decision_markdown(
+            &decision,
+            "decision:theme/hold-tsmc",
+            0,
+            &["evidence:chat/one".into()],
+            &[],
+        );
+        assert!(markdown.contains("title: 'Hold TSMC'"));
+        assert!(markdown.contains("summary: 'Packaging remains the binding constraint.'"));
+        assert!(markdown.contains("**Probability:** 65%"));
+        assert!(!markdown.contains("0.6500"));
     }
 
     #[test]
@@ -953,17 +958,14 @@ mod tests {
     }
 
     #[test]
-    fn evidence_markdown_flattens_untrusted_inline_text() {
-        let markdown = evidence_markdown(
-            &staged_evidence(
-                "First line\n# Forged heading | cell",
-                serde_json::json!("value\n# Not a heading"),
-            ),
-            0,
-        );
-        assert!(markdown.contains("First line # Forged heading | cell"));
+    fn evidence_markdown_keeps_agent_body_and_sanitizes_source_notes() {
+        let mut evidence = staged_evidence("First line\n# Capacity\n\nUtilization rose to 91%.");
+        evidence.citations[0].note = Some("Note\n# Forged heading".into());
+        let markdown = evidence_markdown(&evidence, 0);
+        assert!(markdown.contains("# Capacity"));
+        assert!(markdown.contains("Utilization rose to 91%."));
+        assert!(markdown.contains("Note # Forged heading — web_fetch via example.test"));
         assert!(!markdown.contains("\n# Forged heading"));
-        assert!(markdown.contains("    \"value\\n# Not a heading\""));
     }
 
     #[cfg(unix)]
@@ -983,8 +985,7 @@ mod tests {
             crate::runtime::GuruTerminalRuntime::new(runtime_path).unwrap(),
         ));
         let workspace = crate::commands::tests::bound_root(&workspace_path);
-        let existing =
-            evidence_markdown(&staged_evidence("Existing claim.", serde_json::json!(1)), 0);
+        let existing = evidence_markdown(&staged_evidence("Existing claim."), 0);
         fs::write(
             workspace_path.join("guruterminal/evidence/chat-one.md"),
             existing,
@@ -997,7 +998,7 @@ mod tests {
             "evidence",
             "evidence:chat/one",
             Some(&MemoryProposalBase::Absent),
-            evidence_markdown(&staged_evidence("Later claim.", serde_json::json!(2)), 1),
+            evidence_markdown(&staged_evidence("Later claim."), 1),
         )
         .await;
         assert!(

@@ -731,11 +731,9 @@ async fn aborted_turn_capture_does_not_persist_evidence_decision_or_artifact() {
             json!({
                 "title": "Aborted evidence",
                 "summary": "This must remain staged only.",
-                "as_of": "2026-08-24",
-                "claims": [{
-                    "text": "The value is 42.",
-                    "citations": [{"result_ref": result_ref, "pointer": "/value"}]
-                }]
+                "as_of": "2026-08-24T00:00:00Z",
+                "markdown": "The value is 42.",
+                "citations": [{"result_ref": result_ref}]
             }),
         )
         .await

@@ -128,7 +128,6 @@ impl ChatDecision {
         let object = self
             .payload
             .as_object()
-            .filter(|object| object.len() == 8)
             .ok_or(DomainError::Invalid("chat decision payload is invalid"))?;
         let required = [
             "stance",
@@ -141,6 +140,9 @@ impl ChatDecision {
             "invalidation_conditions",
         ];
         if required.iter().any(|key| !object.contains_key(*key))
+            || object.keys().any(|key| {
+                !required.contains(&key.as_str()) && key != "title" && key != "summary"
+            })
             || !object
                 .get("stance")
                 .and_then(Value::as_str)
@@ -151,6 +153,18 @@ impl ChatDecision {
                 .get("probability")
                 .and_then(Value::as_f64)
                 .is_some_and(|value| (0.0..=1.0).contains(&value))
+            || object.get("title").is_some_and(|value| {
+                !value.as_str().is_some_and(|title| {
+                    let chars = title.chars().count();
+                    chars >= 1 && chars <= 180 && !title.contains('\0')
+                })
+            })
+            || object.get("summary").is_some_and(|value| {
+                !value.as_str().is_some_and(|summary| {
+                    let chars = summary.chars().count();
+                    chars >= 1 && chars <= 400 && !summary.contains('\0')
+                })
+            })
         {
             return Err(DomainError::Invalid("chat decision payload is invalid"));
         }

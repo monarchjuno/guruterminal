@@ -72,15 +72,11 @@ async fn evidence_rejects_result_refs_from_another_guru_capture() {
     let mut second = bare_executor(&second_temporary);
     second.guru_id = "guru-b".into();
     let result = second
-        .create_evidence(json!({
-            "title": "Cross-Guru result",
-            "summary": "A result from another Guru must not resolve.",
-            "as_of": "2026-08-24",
-            "claims": [{
-                "text": "The value is 42.",
-                "citations": [{"result_ref": result_ref, "pointer": "/value"}]
-            }]
-        }))
+        .create_evidence(evidence(
+            "Cross-Guru result",
+            &result_ref,
+            "The value is 42.",
+        ))
         .await;
     assert!(
         matches!(result, Err(BrokerError::Execution(message)) if message.contains("delivered result"))
@@ -116,15 +112,11 @@ async fn decision_accepts_staged_evidence_and_rejects_raw_result_refs() {
     );
 
     let created = executor
-        .create_evidence(json!({
-            "title": "Exact value",
-            "summary": "One exact selected value.",
-            "as_of": "2026-08-24",
-            "claims": [{
-                "text": "The value is 42.",
-                "citations": [{"result_ref": result_ref, "pointer": "/value"}]
-            }]
-        }))
+        .create_evidence(evidence(
+            "Exact value",
+            &result_ref,
+            "The value is 42.",
+        ))
         .await
         .unwrap();
     executor
@@ -137,45 +129,28 @@ async fn decision_accepts_staged_evidence_and_rejects_raw_result_refs() {
 }
 
 #[tokio::test]
-async fn repeated_citations_keep_only_payload_free_receipts() {
+async fn evidence_create_keeps_receipts_without_result_payloads() {
     let temporary = tempfile::tempdir().unwrap();
     let executor = bare_executor(&temporary);
     let mut payload = serde_json::Map::new();
     payload.insert("bulk".into(), Value::String("x".repeat(2 * 1024 * 1024)));
-    for index in 0..8 {
-        payload.insert(format!("value_{index}"), json!(index));
-    }
+    payload.insert("value".into(), json!(42));
     let result_ref = delivered_result(&executor, Value::Object(payload)).await;
-    let claims = (0..16)
-        .map(|claim| {
-            json!({
-                "text": format!("Bounded claim {claim}"),
-                "citations": (0..8).map(|index| json!({
-                    "result_ref": result_ref,
-                    "pointer": format!("/value_{index}")
-                })).collect::<Vec<_>>()
-            })
-        })
-        .collect::<Vec<_>>();
 
     executor
-        .create_evidence(json!({
-            "title": "Many citations",
-            "summary": "Repeated citations must not duplicate the source payload.",
-            "as_of": "2026-08-24",
-            "claims": claims
-        }))
+        .create_evidence(evidence(
+            "Large result",
+            &result_ref,
+            "The cited result supports a utilization of 42.",
+        ))
         .await
         .unwrap();
 
     let staged = executor.capture.staged_evidence.lock().await;
-    assert_eq!(staged[0].claims.len(), 16);
-    assert!(staged[0]
-        .claims
-        .iter()
-        .flat_map(|claim| &claim.citations)
-        .all(|citation| citation.selected.is_number()
-            && citation.receipt.response_digest.len() == 64));
+    assert_eq!(staged[0].citations.len(), 1);
+    assert_eq!(staged[0].citations[0].receipt.response_digest.len(), 64);
+    assert_eq!(staged[0].markdown, "The cited result supports a utilization of 42.");
+    assert!(!staged[0].markdown.contains("xxxx"));
 }
 
 #[tokio::test]
@@ -220,15 +195,11 @@ async fn chat_update_accepts_staged_evidence_not_raw_results() {
         Err(BrokerError::Execution(_))
     ));
     let created = executor
-        .create_evidence(json!({
-            "title": "Exact claim",
-            "summary": "Selected from a delivered result.",
-            "as_of": "2026-08-24",
-            "claims": [{
-                "text": "The claim is exact.",
-                "citations": [{"result_ref": result_ref, "pointer": "/claim"}]
-            }]
-        }))
+        .create_evidence(evidence(
+            "Exact claim",
+            &result_ref,
+            "The claim is exact.",
+        ))
         .await
         .unwrap();
     let evidence_id = created["evidence_id"].as_str().unwrap().to_owned();
@@ -895,7 +866,7 @@ async fn guru_search_omits_revoked_wiki_and_lens_by_default() {
 }
 
 #[tokio::test]
-async fn evidence_create_selects_exact_result_values() {
+async fn evidence_create_accepts_readable_markdown_and_current_result_refs() {
     let temporary = tempfile::tempdir().unwrap();
     let executor = bare_executor(&temporary);
     let result_ref = delivered_result(
@@ -908,7 +879,7 @@ async fn evidence_create_selects_exact_result_values() {
             .create_evidence(json!({
                 "title": "Old contract",
                 "summary": "Invalid old source IDs.",
-                "as_of": "2026-08-13",
+                "as_of": "2026-08-13T00:00:00Z",
                 "claims": [{"text": "claim", "citations": [{"source_id": "web:1"}]}]
             }))
             .await,
@@ -918,14 +889,14 @@ async fn evidence_create_selects_exact_result_values() {
         .create_evidence(json!({
             "title": "TSMC 3nm capacity",
             "summary": "Packaging tightness from this research turn.",
-            "as_of": "2026-08-13",
-            "claims": [{
-                "text": "3nm utilization rose.",
-                "citations": [{
-                    "result_ref": result_ref,
-                    "pointer": "/company/commentary",
-                    "excerpt": "CoWoS tightness"
-                }]
+            "as_of": "2026-08-13T15:30:00+09:00",
+            "markdown": "3nm utilization rose on CoWoS tightness.",
+            "source": "https://example.test/tsmc",
+            "period": "2026-Q2",
+            "entities": ["ticker:TSM"],
+            "citations": [{
+                "result_ref": result_ref,
+                "note": "TSMC commentary"
             }]
         }))
         .await
@@ -938,107 +909,97 @@ async fn evidence_create_selects_exact_result_values() {
         let evidence = executor.capture.staged_evidence.lock().await;
         assert_eq!(evidence.len(), 1);
         assert_eq!(evidence[0].title, "TSMC 3nm capacity");
+        assert_eq!(evidence[0].as_of, "2026-08-13T15:30:00+09:00");
         assert_eq!(
-            evidence[0].claims[0].citations[0].selected,
-            "CoWoS tightness"
+            evidence[0].markdown,
+            "3nm utilization rose on CoWoS tightness."
         );
-        assert_eq!(
-            evidence[0].claims[0].citations[0].pointer,
-            "/company/commentary"
-        );
+        assert_eq!(evidence[0].source.as_deref(), Some("https://example.test/tsmc"));
+        assert_eq!(evidence[0].citations[0].note.as_deref(), Some("TSMC commentary"));
+        assert_eq!(evidence[0].citations[0].receipt.origin.as_deref(), Some("test"));
     }
 }
 
 #[tokio::test]
-async fn evidence_create_rejects_prior_run_refs_and_inexact_excerpts() {
+async fn evidence_create_rejects_prior_run_refs_and_reserved_body() {
     let temporary = tempfile::tempdir().unwrap();
     let executor = bare_executor(&temporary);
     let result = executor
         .create_evidence(json!({
             "title": "Prior evidence",
             "summary": "A prior ID is not a current result receipt.",
-            "as_of": "2026-08-13",
-            "claims": [{
-                "text": "This must be refreshed.",
-                "citations": [{"result_ref": "result:prior", "pointer": ""}]
-            }]
+            "as_of": "2026-08-13T00:00:00Z",
+            "markdown": "This must be refreshed.",
+            "citations": [{"result_ref": "result:prior"}]
         }))
         .await;
     assert!(
         matches!(result, Err(BrokerError::Execution(message)) if message.contains("delivered result"))
     );
     let result_ref = delivered_result(&executor, json!({"text": "exact value"})).await;
-    let result = executor
+    let reserved_heading = executor
         .create_evidence(json!({
-            "title": "Bad excerpt",
-            "summary": "Excerpt must be exact.",
-            "as_of": "2026-08-13",
-            "claims": [{
-                "text": "Claim",
-                "citations": [{
-                    "result_ref": result_ref,
-                    "pointer": "/text",
-                    "excerpt": "invented"
-                }]
-            }]
+            "title": "Reserved heading",
+            "summary": "The host owns Sources.",
+            "as_of": "2026-08-13T00:00:00Z",
+            "markdown": "Claim text.\n\n# Sources\n\n- invented",
+            "citations": [{"result_ref": result_ref}]
         }))
         .await;
     assert!(
-        matches!(result, Err(BrokerError::Execution(message)) if message.contains("exact substring"))
+        matches!(reserved_heading, Err(BrokerError::Execution(message)) if message.contains("# Sources"))
     );
 }
 
 #[tokio::test]
-async fn evidence_create_rejects_invalid_pointers_and_oversized_selections() {
+async fn evidence_create_rejects_date_only_as_of_and_runtime_fields() {
     let temporary = tempfile::tempdir().unwrap();
     let executor = bare_executor(&temporary);
     let result_ref = delivered_result(&executor, json!({"value": 42})).await;
-    for pointer in ["not-a-json-pointer", "/missing", "/bad~2", "/trailing~"] {
-        let result = executor
-            .create_evidence(json!({
-                "title": "Invalid pointer",
-                "summary": "The selected value must exist in this result.",
-                "as_of": "2026-08-24",
-                "claims": [{
-                    "text": "The value is 42.",
-                    "citations": [{"result_ref": result_ref, "pointer": pointer}]
-                }]
-            }))
-            .await;
-        assert!(result.is_err(), "pointer {pointer} must be rejected");
-    }
+    let date_only = executor
+        .create_evidence(json!({
+            "title": "Date only",
+            "summary": "as_of must include time.",
+            "as_of": "2026-08-24",
+            "markdown": "The value is 42.",
+            "citations": [{"result_ref": result_ref}]
+        }))
+        .await;
+    assert!(matches!(date_only, Err(BrokerError::Malformed)));
+    let pointer = executor
+        .create_evidence(json!({
+            "title": "Legacy pointer",
+            "summary": "Pointers are no longer accepted.",
+            "as_of": "2026-08-24T00:00:00Z",
+            "markdown": "The value is 42.",
+            "citations": [{"result_ref": result_ref, "pointer": "/value"}]
+        }))
+        .await;
+    assert!(matches!(pointer, Err(BrokerError::Malformed)));
     let forged_receipt = executor
         .create_evidence(json!({
             "title": "Forged receipt",
             "summary": "Receipt metadata is host-owned.",
-            "as_of": "2026-08-24",
-            "claims": [{
-                "text": "The value is 42.",
-                "citations": [{
-                    "result_ref": result_ref,
-                    "pointer": "/value",
-                    "receipt": {"provider": "forged"}
-                }]
+            "as_of": "2026-08-24T00:00:00Z",
+            "markdown": "The value is 42.",
+            "citations": [{
+                "result_ref": result_ref,
+                "receipt": {"provider": "forged"}
             }]
         }))
         .await;
     assert!(matches!(forged_receipt, Err(BrokerError::Malformed)));
 
-    let oversized_ref = delivered_result(&executor, json!({"value": "x".repeat(256 * 1024)})).await;
     let oversized = executor
         .create_evidence(json!({
-            "title": "Oversized selection",
-            "summary": "Evidence data must remain bounded.",
-            "as_of": "2026-08-24",
-            "claims": [{
-                "text": "This selection is too large.",
-                "citations": [{"result_ref": oversized_ref, "pointer": "/value"}]
-            }]
+            "title": "Oversized body",
+            "summary": "Evidence markdown must remain bounded.",
+            "as_of": "2026-08-24T00:00:00Z",
+            "markdown": "x".repeat(16 * 1024 + 1),
+            "citations": [{"result_ref": result_ref}]
         }))
         .await;
-    assert!(
-        matches!(oversized, Err(BrokerError::Execution(message)) if message.contains("selected data is too large"))
-    );
+    assert!(matches!(oversized, Err(BrokerError::Malformed)));
 }
 
 fn learned_wiki_markdown(id: &str, title: &str) -> String {

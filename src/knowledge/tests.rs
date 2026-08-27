@@ -90,7 +90,7 @@ fn evidence_dossier_omits_record_source_and_search_text_carries_entity_period() 
 }
 
 #[test]
-fn source_less_evidence_requires_claims_and_sources() {
+fn source_less_evidence_requires_sources() {
     let root = root();
     write(
         &root,

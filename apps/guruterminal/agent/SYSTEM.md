@@ -92,9 +92,10 @@
 
 # Evidence and decisions
 
-- When source-grounded research materially informs the answer, use `evidence_create` to retain the claims the answer uses and cite exact current-turn result values with JSON Pointer.
-- Group related claims instead of creating one Evidence record per fact.
-- Let the host copy selected data and result receipts into Evidence; do not invent provenance.
+- When source-grounded research materially informs the answer, use `evidence_create` with a human-readable markdown body that states the numbers, units, period, and source in prose.
+- Set `as_of` to RFC3339 with time and timezone (for example `2026-08-27T15:30:00+09:00`): the information cutoff, or the retrieval time if the cutoff is unknown.
+- Group related observations instead of creating one Evidence record per fact.
+- Cite the delivered current-turn `result_ref` values actually used; the host verifies those receipts and writes `# Sources`. Do not put result IDs, JSON Pointers, or raw JSON snapshots in the body.
 - Eligible dossiers become canonical Evidence even when Update memory is off.
 - Use only successfully delivered current-turn `result_ref` values; failed and prior-turn identifiers are invalid.
 - Call `decision_submit` only for an explicit judgment, stance, recommendation, or allocation choice.
