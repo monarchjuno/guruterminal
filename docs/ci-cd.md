@@ -6,7 +6,7 @@ This page is the release procedure. Product behavior is not defined here. Workfl
 
 ## GitHub
 
-Require pull requests for `main`. Restrict `v*` tag creation, update, and deletion. Protect the `release`, `release-qualification`, and `stable-release` environments. Signing secrets live only in `release`. `stable-release` must require at least one reviewer and prevent self-review, so the person who dispatches promotion cannot approve it. Enable immutable GitHub Releases.
+Require pull requests for `main`. Restrict `v*` tag creation, update, and deletion. Protect the `release`, `release-qualification`, and `stable-release` environments. If an environment uses selected deployment branches and tags, allow the `v*` **tag** pattern for each tag-triggered release job. Signing secrets live only in `release`. `stable-release` must require at least one reviewer, prevent self-review, and disallow administrator bypass, so the person who dispatches promotion cannot approve or force the publication. Enable immutable GitHub Releases.
 
 Before every RC tag and stable promotion, run the checked-in, read-only audit
 from an authenticated GitHub CLI session:
@@ -33,10 +33,15 @@ rather than adding a broader long-lived credential to every release job.
 ## CI
 
 PRs and `main` run frontend, Rust, the finance and OpenBB Python sidecars,
-compute, repository checks, and target-platform package smokes. Actions are pinned
-to commit SHAs. Toolchain pins: Rust 1.97.1, uv 0.11.2, Syft 1.50.0.
+compute, repository checks, native interaction, and target-platform package
+smokes. Source checks split across Ubuntu (web, Python) and macOS (Rust) and do
+not block native or package jobs. Repeat compiles restore a per-job Rust cache.
+Pull requests that only touch documentation skip native and package jobs while
+still reporting the required check names. Renderer-only pull requests skip
+package smokes. `main` and `workflow_dispatch` always run the full set. Actions
+are pinned to commit SHAs. Toolchain pins: Rust 1.97.1, uv 0.11.2, Syft 1.50.0.
 
-The macOS CI job also stages the same pinned sidecars used by the package smoke
+The macOS native job stages the same pinned sidecars used by the package smoke
 and drives an isolated native WebView through onboarding, Agent, Marketplace,
 Memory, Chat lifecycle, accessibility, and restart-persistence flows. It uses
 no provider or connector credentials; the explicitly authorized live Chat suite
@@ -67,7 +72,11 @@ an RC, a stable promotion, and a retried run from reusing a macOS build number.
 
 1. Set the product to `X.Y.Z-rc.N`, commit it, push it to `main`, and wait for the exact commit's CI run to pass. Create `vX.Y.Z-rc.N`; the workflow publishes that non-draft prerelease.
 2. On clean machines, complete the acceptance flow in `GURU_TERMINAL.md`: ordinary Chat writes justified Wiki or Lens, and a later relevant turn uses it. A Memory write that never changes later work does not qualify.
-3. After RC acceptance, set the product to `X.Y.Z`, replace the matching `CHANGELOG.md` `Unreleased` heading with its final ISO date, commit, push, and wait for that exact commit's CI run to pass. Create `vX.Y.Z`; its workflow requires the matching published RC and creates the stable **draft** candidate.
+3. After RC acceptance, set the product to `X.Y.Z`, ensure the matching
+   `CHANGELOG.md` heading has its final ISO date (replace `Unreleased` if
+   present), commit, push, and wait for that exact commit's CI run to pass.
+   Create `vX.Y.Z`; its workflow requires the matching published RC and creates
+   the stable **draft** candidate.
 4. Qualify that stable draft: matching RC → stable for the first stable release,
    then current Latest → strictly newer stable on both platforms. Scripts:
    `verify-release-assets.py`, `serve-update-candidate.py`,
@@ -97,16 +106,26 @@ developer's daily-use machine or on a production network.
      --private-key /absolute/path/to/github-com-test-key.pem
    ```
 
+   On Windows, perform the equivalent from an elevated PowerShell (for example,
+   `py -3 ...`); `sudo` above is macOS/Linux notation.
+
 4. On a clean machine, install the published predecessor. The matching RC is
    valid only for the first stable release; afterward the predecessor must be
    the current Latest release and the candidate version must be strictly newer.
    Use the app's explicit update flow to install the candidate, restart it, and
    verify both the installed version and retained local data. Capture durable,
    credential-free HTTPS evidence for each platform.
-5. Dispatch `release-qualification.yml` with both evidence URLs, the identical
-   candidate-set digest for both platforms, and the two confirmation flags. Its
-   receipt seals the exact tested asset set; use its successful run ID when
-   dispatching `promote-release.yml`.
+5. On each clean signed candidate, complete the `GURU_TERMINAL.md` Marketplace,
+   Chat, and Memory flow, including a later turn that uses written Memory and an
+   explicit Wiki or Lens Revert. Capture durable credential-free HTTPS evidence
+   that identifies the candidate tag and candidate-set digest; OAuth or
+   connector credentials must never appear in that evidence.
+6. Dispatch `release-qualification.yml` from the candidate `vX.Y.Z` tag (not
+   `main`) with the two update-evidence URLs, the two product-acceptance URLs,
+   the identical candidate-set digest for both platforms, and all four
+   confirmation flags. Its receipt seals the exact tested asset set; use its
+   successful run ID to dispatch `promote-release.yml` from that same candidate
+   tag.
 
 Sites links to `releases/latest/download/GuruTerminal-macOS-arm64.dmg` and `GuruTerminal-Windows-x64.exe`. The app feed is `https://github.com/monarchjuno/guruterminal/releases/latest/download/latest.json`. Install and restart need explicit user confirmation.
 
