@@ -62,7 +62,7 @@ fn launch_is_offline_and_exposes_only_explicit_extension_tools() {
 }
 
 #[test]
-fn stable_private_project_settings_force_sse_without_overwriting_existing_input() {
+fn stable_private_project_settings_use_auto_and_only_upgrade_the_exact_prior_policy() {
     let temporary = tempfile::tempdir().unwrap();
     let working_dir = temporary.path().join("pi-runtime");
     ensure_private_directory(&working_dir).unwrap();
@@ -91,6 +91,10 @@ fn stable_private_project_settings_force_sse_without_overwriting_existing_input(
     let settings_path = working_dir.join(".pi/settings.json");
     assert_eq!(std::fs::read(&settings_path).unwrap(), PI_PROJECT_SETTINGS);
     ensure_pi_project_settings(&config).unwrap();
+
+    std::fs::write(&settings_path, PREVIOUS_PI_PROJECT_SETTINGS).unwrap();
+    ensure_pi_project_settings(&config).unwrap();
+    assert_eq!(std::fs::read(&settings_path).unwrap(), PI_PROJECT_SETTINGS);
 
     std::fs::write(&settings_path, b"{}").unwrap();
     assert!(ensure_pi_project_settings(&config).is_err());

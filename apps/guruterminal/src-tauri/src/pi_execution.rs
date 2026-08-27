@@ -99,6 +99,57 @@ async fn wait_for_pi_response(
     })?
 }
 
+async fn wait_for_pi_responses(
+    receiver: &mut broadcast::Receiver<PiEvent>,
+    requests: &[(u64, &'static str)],
+) -> Result<BTreeMap<u64, Value>, CommandError> {
+    let mut pending = requests.iter().copied().collect::<BTreeMap<_, _>>();
+    let mut responses = BTreeMap::new();
+    timeout(PI_CONTROL_TIMEOUT, async {
+        while !pending.is_empty() {
+            match receiver.recv().await {
+                Ok(PiEvent::Rpc { payload })
+                    if payload.get("type").and_then(Value::as_str) == Some("response") =>
+                {
+                    let Some(request_id) = payload.get("id").and_then(Value::as_u64) else {
+                        continue;
+                    };
+                    let Some(operation) = pending.remove(&request_id) else {
+                        continue;
+                    };
+                    if payload.get("success").and_then(Value::as_bool) != Some(true) {
+                        return Err(CommandError::new(
+                            "pi_unavailable",
+                            format!("Pi rejected the {operation} control"),
+                        ));
+                    }
+                    responses.insert(
+                        request_id,
+                        payload.get("data").cloned().unwrap_or(Value::Null),
+                    );
+                }
+                Ok(PiEvent::ProtocolError { .. }) | Ok(PiEvent::Exited) => {
+                    return Err(CommandError::new(
+                        "pi_unavailable",
+                        "Pi stopped during session initialization",
+                    ));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(CommandError::new(
+                        "pi_unavailable",
+                        "Pi event stream closed during session initialization",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| CommandError::new("pi_unavailable", "Pi session initialization timed out"))??;
+    Ok(responses)
+}
+
 #[async_trait]
 trait PiExecutionControl {
     async fn available_thinking_levels(&mut self) -> Result<Value, CommandError>;
@@ -152,6 +203,18 @@ async fn verify_with_control_and_state(
         .validate_run_options(&execution.run_options)?;
 
     let levels_response = control.available_thinking_levels().await?;
+    validate_thinking_levels_response(&levels_response, execution)?;
+
+    let state = control.state().await?;
+    let model_lock = validate_execution_state(&state, execution)?;
+
+    Ok((model_lock, state))
+}
+
+fn validate_thinking_levels_response(
+    levels_response: &Value,
+    execution: &PiExecutionConfig,
+) -> Result<(), CommandError> {
     let levels = levels_response
         .get("levels")
         .and_then(Value::as_array)
@@ -168,11 +231,7 @@ async fn verify_with_control_and_state(
             "thinking level is not supported by Pi for the selected model",
         ));
     }
-
-    let state = control.state().await?;
-    let model_lock = validate_execution_state(&state, execution)?;
-
-    Ok((model_lock, state))
+    Ok(())
 }
 
 fn validate_execution_state(
@@ -287,6 +346,77 @@ pub async fn configure_pi_session_execution(
         file_requirement,
     )?;
     Ok((model_lock, session_state))
+}
+
+/// Pipelines all independent startup controls before waiting for responses.
+/// Pi processes stdin requests in order, so the final state response attests
+/// both auto settings without paying one local RPC round trip per command.
+pub async fn configure_pi_session_and_read_entries(
+    pi: &PiProcess,
+    events: &mut broadcast::Receiver<PiEvent>,
+    execution: &PiExecutionConfig,
+    expected_session_id: &str,
+    expected_session_directory: &Path,
+    file_requirement: PiSessionFileRequirement,
+) -> Result<(ExecutionModelLock, PiSessionState, PiEntriesState), CommandError> {
+    execution.model.validate()?;
+    execution
+        .model
+        .validate_thinking_level(&execution.thinking_level)?;
+    execution
+        .model
+        .validate_run_options(&execution.run_options)?;
+
+    let levels_request = pi
+        .get_available_thinking_levels()
+        .await
+        .map_err(|_| CommandError::new("pi_unavailable", "Pi could not read thinking levels"))?;
+    let compaction_request = pi.set_auto_compaction(true).await.map_err(|_| {
+        CommandError::new("pi_unavailable", "Pi could not enable session compaction")
+    })?;
+    let retry_request = pi
+        .set_auto_retry(true)
+        .await
+        .map_err(|_| CommandError::new("pi_unavailable", "Pi could not enable session retry"))?;
+    let state_request = pi
+        .get_state()
+        .await
+        .map_err(|_| CommandError::new("pi_unavailable", "Pi could not confirm session state"))?;
+    let entries_request = pi
+        .get_entries(None)
+        .await
+        .map_err(|_| CommandError::new("pi_unavailable", "Pi could not read its session cursor"))?;
+
+    let responses = wait_for_pi_responses(
+        events,
+        &[
+            (levels_request, "thinking-level discovery"),
+            (compaction_request, "session compaction configuration"),
+            (retry_request, "session retry configuration"),
+            (state_request, "session state confirmation"),
+            (entries_request, "session cursor read"),
+        ],
+    )
+    .await?;
+    let levels = responses.get(&levels_request).ok_or_else(|| {
+        CommandError::new("pi_unavailable", "Pi omitted thinking-level discovery")
+    })?;
+    validate_thinking_levels_response(levels, execution)?;
+    let state = responses.get(&state_request).ok_or_else(|| {
+        CommandError::new("pi_unavailable", "Pi omitted session state confirmation")
+    })?;
+    let model_lock = validate_execution_state(state, execution)?;
+    let session_state = validated_session_state(
+        state,
+        expected_session_id,
+        expected_session_directory,
+        file_requirement,
+    )?;
+    let entries =
+        parse_pi_entries(responses.get(&entries_request).ok_or_else(|| {
+            CommandError::new("pi_unavailable", "Pi omitted session cursor read")
+        })?)?;
+    Ok((model_lock, session_state, entries))
 }
 
 impl PiEntriesState {
