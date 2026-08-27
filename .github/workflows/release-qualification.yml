@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_tag:
-        description: Stable draft tag (vMAJOR.MINOR.PATCH)
+        description: Stable draft tag (vMAJOR.MINOR.PATCH); select this same tag as the workflow ref
         required: true
         type: string
       predecessor_tag:

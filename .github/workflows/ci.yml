@@ -14,10 +14,34 @@ concurrency:
   group: guruterminal-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  verify:
-    name: Source and product contracts
-    runs-on: macos-15
+  changes:
+    name: Classify change scope
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+      packaging: ${{ steps.scope.outputs.packaging }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify native and packaging surfaces
+        id: scope
+        env:
+          CI_FORCE_FULL: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 apps/guruterminal/scripts/ci_change_scope.py
+
+  verify-web:
+    name: Web contracts
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -25,85 +49,127 @@ jobs:
           persist-credentials: false
 
       - name: Install Node 22.19
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: ./.github/actions/setup-toolchains
         with:
-          node-version: 22.19.0
-          cache: npm
-          cache-dependency-path: apps/guruterminal/package-lock.json
+          node: "true"
+          node-cache: |
+            apps/guruterminal/package-lock.json
+            apps/guruterminal/e2e/package-lock.json
+            apps/guruterminal/compute/package-lock.json
+
+      - name: Verify renderer, compute, and E2E tooling
+        working-directory: apps/guruterminal
+        run: |
+          set -euo pipefail
+          npm ci
+          (cd e2e && npm ci)
+          (cd compute && npm ci --ignore-scripts)
+          sh scripts/check.sh web
+
+  verify-python:
+    name: Python contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Python 3.12 and uv
+        uses: ./.github/actions/setup-toolchains
+        with:
+          python: "true"
+
+      - name: Verify finance and OpenBB sidecars
+        run: |
+          set -euo pipefail
+          uv sync --project apps/guruterminal/python --locked --python 3.12
+          uv sync --project apps/guruterminal/openbb --locked --python 3.12
+          sh apps/guruterminal/scripts/check.sh python
+
+  verify-rust:
+    name: Rust contracts
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        uses: ./.github/actions/setup-toolchains
         with:
-          toolchain: 1.97.1
-          components: clippy,rustfmt
+          rust: "true"
+          rust-components: clippy,rustfmt
+          rust-cache-key: verify
 
-      - name: Install Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
+      - name: Verify workspace and desktop Rust
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --all-targets --locked
+          sh apps/guruterminal/scripts/check.sh rust
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.2
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/guruterminal/python/uv.lock
-            apps/guruterminal/openbb/uv.lock
-
-      - name: Verify Guru Terminal source and product contracts
-        run: scripts/verify.sh
+  verify:
+    name: Source and product contracts
+    needs:
+      - verify-web
+      - verify-python
+      - verify-rust
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every source check
+        run: |
+          set -euo pipefail
+          test "${{ needs.verify-web.result }}" = success
+          test "${{ needs.verify-python.result }}" = success
+          test "${{ needs.verify-rust.result }}" = success
 
   native-e2e:
     name: Native macOS interaction
-    needs: verify
-    runs-on: macos-15
+    needs: changes
+    runs-on: ${{ needs.changes.outputs.native == 'true' && 'macos-15' || 'ubuntu-latest' }}
     steps:
+      - name: Skip unchanged native surface
+        if: ${{ needs.changes.outputs.native != 'true' }}
+        run: echo "No native-surface changes; skipping the macOS interaction suite."
+
       - name: Check out repository
+        if: ${{ needs.changes.outputs.native == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - name: Install Node 22.19
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Install CI toolchains
+        if: ${{ needs.changes.outputs.native == 'true' }}
+        uses: ./.github/actions/setup-toolchains
         with:
-          node-version: 22.19.0
-          cache: npm
-          cache-dependency-path: |
+          node: "true"
+          node-cache: |
             apps/guruterminal/package-lock.json
             apps/guruterminal/e2e/package-lock.json
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: 1.97.1
-
-      - name: Install Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.2
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/guruterminal/python/uv.lock
-            apps/guruterminal/openbb/uv.lock
+          rust: "true"
+          rust-cache-key: e2e
+          python: "true"
 
       - name: Install renderer dependencies
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal
         run: npm ci
 
       - name: Install native E2E dependencies
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal/e2e
         run: npm ci
 
       - name: Stage pinned macOS sidecars
+        if: ${{ needs.changes.outputs.native == 'true' }}
         run: apps/guruterminal/scripts/stage-macos-arm64.sh
 
       - name: Run native interaction regression suite
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal/e2e
         env:
           GURUTERMINAL_E2E_REQUIRE_STAGED_RUNTIMES: "1"
@@ -116,64 +182,56 @@ jobs:
 
   native-e2e-windows:
     name: Native Windows interaction
-    needs: verify
-    runs-on: windows-latest
-    # Allow one cold Tauri build plus the two warm launches required by the
-    # full UI suite and two-launch Memory persistence contract.
+    needs: changes
+    runs-on: ${{ needs.changes.outputs.native == 'true' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
+      - name: Skip unchanged native surface
+        if: ${{ needs.changes.outputs.native != 'true' }}
+        run: echo "No native-surface changes; skipping the Windows interaction suite."
+
       - name: Check out repository
+        if: ${{ needs.changes.outputs.native == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - name: Install Node 22.19
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Install CI toolchains
+        if: ${{ needs.changes.outputs.native == 'true' }}
+        uses: ./.github/actions/setup-toolchains
         with:
-          node-version: 22.19.0
-          cache: npm
-          cache-dependency-path: |
+          node: "true"
+          node-cache: |
             apps/guruterminal/package-lock.json
             apps/guruterminal/e2e/package-lock.json
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: 1.97.1
-
-      - name: Install Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
+          rust: "true"
+          rust-cache-key: e2e
+          python: "true"
 
       - name: Verify Windows Job Object descendant containment
+        if: ${{ needs.changes.outputs.native == 'true' }}
         shell: pwsh
         run: python apps/guruterminal/scripts/check-sidecars.py --windows-job-self-test
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.2
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/guruterminal/python/uv.lock
-            apps/guruterminal/openbb/uv.lock
-
       - name: Install renderer dependencies
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal
         shell: pwsh
         run: npm ci
 
       - name: Install native E2E dependencies
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal/e2e
         shell: pwsh
         run: npm ci
 
       - name: Stage pinned Windows sidecars
+        if: ${{ needs.changes.outputs.native == 'true' }}
         shell: pwsh
         run: apps/guruterminal/scripts/stage-windows-x64.ps1
 
       - name: Run native Windows interaction regression suite
+        if: ${{ needs.changes.outputs.native == 'true' }}
         working-directory: apps/guruterminal/e2e
         shell: pwsh
         env:
@@ -189,7 +247,7 @@ jobs:
 
   package-smoke:
     name: Package smoke (${{ matrix.target }})
-    needs: verify
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -200,58 +258,48 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundle: nsis
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ needs.changes.outputs.packaging == 'true' && matrix.os || 'ubuntu-latest' }}
     steps:
+      - name: Skip unchanged packaging surface
+        if: ${{ needs.changes.outputs.packaging != 'true' }}
+        run: echo "No packaging-surface changes; skipping ${{ matrix.target }} package smoke."
+
       - name: Check out repository
+        if: ${{ needs.changes.outputs.packaging == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - name: Install Node 22.19
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Install CI toolchains
+        if: ${{ needs.changes.outputs.packaging == 'true' }}
+        uses: ./.github/actions/setup-toolchains
         with:
-          node-version: 22.19.0
-          cache: npm
-          cache-dependency-path: apps/guruterminal/package-lock.json
-
-      - name: Install Rust target
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          toolchain: 1.97.1
-          targets: ${{ matrix.target }}
-
-      - name: Install Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
+          node: "true"
+          rust: "true"
+          rust-targets: ${{ matrix.target }}
+          rust-cache-key: package-smoke
+          python: "true"
 
       - name: Verify Windows Job Object descendant containment
-        if: runner.os == 'Windows'
+        if: ${{ needs.changes.outputs.packaging == 'true' && runner.os == 'Windows' }}
         run: python apps/guruterminal/scripts/check-sidecars.py --windows-job-self-test
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: 0.11.2
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/guruterminal/python/uv.lock
-            apps/guruterminal/openbb/uv.lock
-
       - name: Install renderer dependencies
+        if: ${{ needs.changes.outputs.packaging == 'true' }}
         working-directory: apps/guruterminal
         run: npm ci
 
       - name: Stage pinned macOS sidecars
-        if: runner.os == 'macOS'
+        if: ${{ needs.changes.outputs.packaging == 'true' && runner.os == 'macOS' }}
         run: apps/guruterminal/scripts/stage-macos-arm64.sh
 
       - name: Stage pinned Windows sidecars
-        if: runner.os == 'Windows'
+        if: ${{ needs.changes.outputs.packaging == 'true' && runner.os == 'Windows' }}
         shell: pwsh
         run: apps/guruterminal/scripts/stage-windows-x64.ps1
 
       - name: Build unsigned package smoke
+        if: ${{ needs.changes.outputs.packaging == 'true' }}
         working-directory: apps/guruterminal
         shell: bash
         run: >-
@@ -261,6 +309,7 @@ jobs:
           --config src-tauri/tauri.package-smoke.conf.json
 
       - name: Assert installer was produced
+        if: ${{ needs.changes.outputs.packaging == 'true' }}
         shell: bash
         env:
           BUNDLE: ${{ matrix.bundle }}
@@ -275,7 +324,7 @@ jobs:
           test -n "$(find "apps/guruterminal/src-tauri/target/$TARGET/release/bundle/$BUNDLE" -type f -name "$pattern" -print -quit)"
 
       - name: Verify installed Windows package contents and workers
-        if: matrix.bundle == 'nsis'
+        if: ${{ needs.changes.outputs.packaging == 'true' && matrix.bundle == 'nsis' }}
         shell: pwsh
         timeout-minutes: 20
         run: |
@@ -296,7 +345,7 @@ jobs:
           }
 
       - name: Verify mounted macOS package metadata
-        if: matrix.bundle == 'dmg'
+        if: ${{ needs.changes.outputs.packaging == 'true' && matrix.bundle == 'dmg' }}
         shell: bash
         run: |
           set -euo pipefail

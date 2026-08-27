@@ -182,12 +182,16 @@ fn release_workflows_pin_actions_and_identity() {
     let ci = text(".github/workflows/ci.yml");
     let qualification = text(".github/workflows/release-qualification.yml");
     let promotion = text(".github/workflows/promote-release.yml");
+    let setup = text(".github/actions/setup-toolchains/action.yml");
     assert!(release.contains("test \"$GITHUB_REPOSITORY\" = \"monarchjuno/guruterminal\""));
-    for workflow in [&release, &ci, &qualification, &promotion] {
+    for workflow in [&release, &ci, &qualification, &promotion, &setup] {
         for line in workflow.lines().map(str::trim) {
             let Some(action) = line.strip_prefix("uses: ") else {
                 continue;
             };
+            if action.starts_with("./") {
+                continue;
+            }
             let revision = action
                 .split_once('@')
                 .map(|(_, revision)| revision)
@@ -205,7 +209,7 @@ fn release_workflows_pin_actions_and_identity() {
         "syft-version: v1.50.0",
     ] {
         assert!(
-            release.contains(required) || ci.contains(required),
+            release.contains(required) || ci.contains(required) || setup.contains(required),
             "workflow toolchain pin is missing: {required}"
         );
     }
