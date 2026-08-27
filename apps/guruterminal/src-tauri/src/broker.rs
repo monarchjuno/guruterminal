@@ -7,7 +7,10 @@ use std::{
     io,
     path::PathBuf,
     pin::Pin,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -398,6 +401,77 @@ pub struct ToolBrokerHandle {
     token: String,
     shutdown: Option<watch::Sender<bool>>,
     task: Option<JoinHandle<()>>,
+    identity_lease: Option<ToolBrokerIdentityLease>,
+}
+
+/// Process-lifetime authority for sequential, turn-scoped tool brokers.
+///
+/// The endpoint and token remain stable so a future long-lived Pi process can
+/// keep one broker identity, while each broker start still receives a fresh
+/// policy, executor, and transaction-cardinality state. This type deliberately
+/// does not implement `Debug` or serialization because its token is authority.
+#[derive(Clone)]
+pub struct ToolBrokerIdentity {
+    inner: Arc<ToolBrokerIdentityInner>,
+}
+
+struct ToolBrokerIdentityInner {
+    socket_path: PathBuf,
+    token: String,
+    leased: AtomicBool,
+}
+
+struct ToolBrokerIdentityLease {
+    identity: Arc<ToolBrokerIdentityInner>,
+}
+
+impl Drop for ToolBrokerIdentityLease {
+    fn drop(&mut self) {
+        self.identity.leased.store(false, Ordering::Release);
+    }
+}
+
+impl ToolBrokerIdentity {
+    pub fn new(socket_path: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(ToolBrokerIdentityInner {
+                socket_path,
+                token: new_broker_token(),
+                leased: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    pub fn socket_path(&self) -> &PathBuf {
+        &self.inner.socket_path
+    }
+
+    pub fn token(&self) -> &str {
+        &self.inner.token
+    }
+
+    pub async fn start(
+        &self,
+        policy: ToolPolicy,
+        executor: Arc<dyn ToolExecutor>,
+    ) -> Result<ToolBrokerHandle, BrokerError> {
+        start_tool_broker_with_identity(self, policy, executor).await
+    }
+
+    fn acquire(&self) -> Result<ToolBrokerIdentityLease, BrokerError> {
+        self.inner
+            .leased
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                BrokerError::Io(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "tool broker identity is already active",
+                ))
+            })?;
+        Ok(ToolBrokerIdentityLease {
+            identity: self.inner.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -533,6 +607,9 @@ impl ToolBrokerHandle {
             Ok(())
         };
         let endpoint_result = remove_broker_endpoint(&self.socket_path);
+        // Keep the identity leased until both the accept task and every
+        // connection handler have drained and the accepting endpoint is gone.
+        self.identity_lease.take();
         task_result?;
         endpoint_result
     }
@@ -546,18 +623,26 @@ impl Drop for ToolBrokerHandle {
             shutdown.send_replace(true);
         }
         if let Some(mut task) = self.task.take() {
+            let identity_lease = self.identity_lease.take();
+            let socket_path = self.socket_path.clone();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 runtime.spawn(async move {
                     if timeout(Duration::from_secs(2), &mut task).await.is_err() {
                         task.abort();
                         let _ = task.await;
                     }
+                    let _ = remove_broker_endpoint(&socket_path);
+                    drop(identity_lease);
                 });
             } else {
                 task.abort();
+                let _ = remove_broker_endpoint(&socket_path);
+                drop(identity_lease);
             }
+            return;
         }
         let _ = remove_broker_endpoint(&self.socket_path);
+        self.identity_lease.take();
     }
 }
 
@@ -601,11 +686,23 @@ pub async fn start_tool_broker(
     policy: ToolPolicy,
     executor: Arc<dyn ToolExecutor>,
 ) -> Result<ToolBrokerHandle, BrokerError> {
+    ToolBrokerIdentity::new(socket_path)
+        .start(policy, executor)
+        .await
+}
+
+async fn start_tool_broker_with_identity(
+    identity: &ToolBrokerIdentity,
+    policy: ToolPolicy,
+    executor: Arc<dyn ToolExecutor>,
+) -> Result<ToolBrokerHandle, BrokerError> {
     if policy.memory_proposal_budget > MAX_MEMORY_PROPOSALS
         || (policy.propose_memory_updates && policy.memory_proposal_budget == 0)
     {
         return Err(BrokerError::Malformed);
     }
+    let identity_lease = identity.acquire()?;
+    let socket_path = identity.socket_path().clone();
     let (shutdown, shutdown_receiver) = watch::channel(false);
     #[cfg(unix)]
     let task = {
@@ -613,12 +710,19 @@ pub async fn start_tool_broker(
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        if socket_path.exists() {
-            std::fs::remove_file(&socket_path)?;
+        match std::fs::symlink_metadata(&socket_path) {
+            Ok(_) => {
+                return Err(BrokerError::Io(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "tool broker endpoint already exists",
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(BrokerError::Io(error)),
         }
         let listener = UnixListener::bind(&socket_path)?;
         std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
-        let server_token = new_broker_token();
+        let server_token = identity.token().to_owned();
         let task_token = server_token.clone();
         let task_shutdown = shutdown.clone();
         let mut shutdown_receiver = shutdown_receiver;
@@ -663,7 +767,7 @@ pub async fn start_tool_broker(
         }
         let security = WindowsPipeSecurity::current_user_and_system()?;
         let server = create_windows_pipe_server(&socket_path, true, &security)?;
-        let server_token = new_broker_token();
+        let server_token = identity.token().to_owned();
         let task_token = server_token.clone();
         let task_path = socket_path.clone();
         let task_shutdown = shutdown.clone();
@@ -714,6 +818,7 @@ pub async fn start_tool_broker(
         token,
         shutdown: Some(shutdown),
         task: Some(task),
+        identity_lease: Some(identity_lease),
     })
 }
 

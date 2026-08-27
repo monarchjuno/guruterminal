@@ -55,6 +55,26 @@ fn workbench_create_and_read_return_canonical_path_and_byte_revision() {
 }
 
 #[test]
+fn mutation_lock_registry_reuses_live_locks_and_prunes_inactive_gurus() {
+    let guru_id = format!("lock-cache-{}", Uuid::new_v4());
+    let other_guru_id = format!("lock-cache-{}", Uuid::new_v4());
+    let first = mutation_lock(&guru_id);
+    let second = mutation_lock(&guru_id);
+    assert!(Arc::ptr_eq(&first, &second));
+    drop(first);
+    drop(second);
+
+    let _other = mutation_lock(&other_guru_id);
+    let locks = GURU_MUTATION_LOCKS
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(!locks.contains_key(&guru_id));
+    assert!(locks.contains_key(&other_guru_id));
+}
+
+#[test]
 fn workbench_create_conflicts_when_the_path_already_exists() {
     let temporary = tempfile::tempdir().unwrap();
     let (store, root) = store(&temporary);

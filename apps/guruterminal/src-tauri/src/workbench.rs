@@ -5,7 +5,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 #[cfg(all(test, unix))]
@@ -26,7 +26,9 @@ pub(crate) const MAX_WORKBENCH_FILE_BYTES: usize = 512 * 1024;
 pub(crate) const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 pub(crate) const MAX_READ_LINES: u32 = 2_000;
 
-static GURU_MUTATION_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+// Keep serialization while a Guru has active mutations without retaining one
+// heap allocation for every Guru ID ever observed by the process.
+static GURU_MUTATION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
 #[cfg(all(test, unix))]
 thread_local! {
@@ -211,10 +213,13 @@ fn mutation_lock(guru_id: &str) -> Arc<Mutex<()>> {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks
-        .entry(guru_id.to_owned())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(guru_id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(guru_id.to_owned(), Arc::downgrade(&lock));
+    lock
 }
 
 fn write_ok(relative: &str, bytes: &[u8]) -> Value {

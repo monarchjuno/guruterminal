@@ -226,10 +226,12 @@ impl AgentRuntimeProfile {
         let mut core_tools = Vec::new();
         let mut add_core = |name: &str| core_tools.push(name.to_owned());
 
-        // Pi's built-in tools are disabled. This read surface is required for
-        // progressive Skill loading; mutation and discovery are Chat-only.
+        // Pi's built-in tools are disabled. Keep the eager surface focused on
+        // reads and discovery. Mutation tools are registered with Pi by the
+        // extension, but are activated only through the deterministic built-in
+        // components below.
         add_core("read");
-        for name in ["write", "edit", "ls", "find", "grep"] {
+        for name in ["ls", "find", "grep"] {
             add_core(name);
         }
         add_core("run_results_list");
@@ -244,15 +246,10 @@ impl AgentRuntimeProfile {
         }
         components.extend(finance_provider_components(&capabilities));
         components.extend(mcp_runtime_components(&capabilities)?);
-        for name in [
-            "artifact_list",
-            "artifact_read",
-            "artifact_publish",
-            "decision_submit",
-            "evidence_create",
-        ] {
+        for name in ["artifact_list", "artifact_read"] {
             add_core(name);
         }
+        components.extend(builtin_mutation_components(propose_memory_updates));
         components.push(AgentRuntimeComponent {
             id: "guruterminal.charting/authoring".into(),
             kind: "tool".into(),
@@ -266,10 +263,6 @@ impl AgentRuntimeProfile {
             add_core("capability_search");
             add_core("capability_load");
         }
-        if propose_memory_updates {
-            add_core("memory_patch_propose");
-        }
-
         Ok(Self {
             schema: RUNTIME_SCHEMA.to_owned(),
             mode: mode.to_owned(),
@@ -285,9 +278,10 @@ impl AgentRuntimeProfile {
             self.core_tool_names
                 .iter()
                 .any(|name| name == "memory_read"),
-            self.core_tool_names
+            self.components
                 .iter()
-                .any(|name| matches!(name.as_str(), "memory_patch_propose")),
+                .flat_map(|component| component.tool_names.iter())
+                .any(|name| name == "memory_patch_propose"),
             &self.capability_ids,
         )?;
         if self.schema != RUNTIME_SCHEMA || &expected != self {
@@ -295,6 +289,50 @@ impl AgentRuntimeProfile {
         }
         Ok(())
     }
+}
+
+fn builtin_mutation_components(propose_memory_updates: bool) -> Vec<AgentRuntimeComponent> {
+    let mut components = vec![
+        AgentRuntimeComponent {
+            id: "guruterminal.workbench/authoring".into(),
+            kind: "tool".into(),
+            server_id: None,
+            name: "Workbench authoring".into(),
+            description: "Create or edit files in this Guru's bounded workbench. Read existing files before editing them; attachment snapshots remain read-only.".into(),
+            tool_names: vec!["write".into(), "edit".into()],
+            provider_ids: Vec::new(),
+        },
+        AgentRuntimeComponent {
+            id: "guruterminal.artifacts/markdown-publishing".into(),
+            kind: "tool".into(),
+            server_id: None,
+            name: "Markdown artifact publishing".into(),
+            description: "Publish or revise a Markdown document artifact for this Chat turn after reading any existing artifact that will be revised.".into(),
+            tool_names: vec!["artifact_publish".into()],
+            provider_ids: Vec::new(),
+        },
+        AgentRuntimeComponent {
+            id: "guruterminal.memory/evidence-and-decisions".into(),
+            kind: "tool".into(),
+            server_id: None,
+            name: "Evidence and decisions".into(),
+            description: "Create canonical Evidence from exact current-turn result values or submit an explicit user-requested Decision. Rust retains final authority and validates all source references.".into(),
+            tool_names: vec!["evidence_create".into(), "decision_submit".into()],
+            provider_ids: Vec::new(),
+        },
+    ];
+    if propose_memory_updates {
+        components.push(AgentRuntimeComponent {
+            id: "guruterminal.memory/learning".into(),
+            kind: "tool".into(),
+            server_id: None,
+            name: "Memory learning".into(),
+            description: "Propose a complete Wiki or Lens record when Update memory is enabled for this run. Rust validates the sealed authority snapshot and applies only eligible changes.".into(),
+            tool_names: vec!["memory_patch_propose".into()],
+            provider_ids: Vec::new(),
+        });
+    }
+    components
 }
 
 type RuntimeComponentSpec = (
@@ -1505,6 +1543,64 @@ mod tests {
         assert!(disclosures
             .tool_names
             .contains(&"finance_resolve_entity".into()));
+    }
+
+    #[test]
+    fn runtime_profile_defers_mutations_deterministically_without_expanding_authority() {
+        let without_learning = AgentRuntimeProfile::new("chat", true, false, &[]).unwrap();
+        let with_learning = AgentRuntimeProfile::new("chat", true, true, &[]).unwrap();
+        let repeated = AgentRuntimeProfile::new("chat", true, true, &[]).unwrap();
+
+        assert_eq!(with_learning, repeated);
+        for profile in [&without_learning, &with_learning] {
+            profile.validate().unwrap();
+            assert!(profile
+                .core_tool_names
+                .iter()
+                .any(|name| name == "capability_search"));
+            assert!(profile
+                .core_tool_names
+                .iter()
+                .any(|name| name == "capability_load"));
+            for mutation in [
+                "write",
+                "edit",
+                "artifact_publish",
+                "decision_submit",
+                "evidence_create",
+                "memory_patch_propose",
+            ] {
+                assert!(!profile.core_tool_names.iter().any(|name| name == mutation));
+            }
+        }
+
+        fn component<'a>(profile: &'a AgentRuntimeProfile, id: &str) -> &'a AgentRuntimeComponent {
+            profile
+                .components
+                .iter()
+                .find(|component| component.id == id)
+                .unwrap()
+        }
+        assert_eq!(
+            component(&with_learning, "guruterminal.workbench/authoring").tool_names,
+            vec!["write".to_owned(), "edit".to_owned()]
+        );
+        assert_eq!(
+            component(&with_learning, "guruterminal.artifacts/markdown-publishing").tool_names,
+            vec!["artifact_publish".to_owned()]
+        );
+        assert_eq!(
+            component(&with_learning, "guruterminal.memory/evidence-and-decisions").tool_names,
+            vec!["evidence_create".to_owned(), "decision_submit".to_owned()]
+        );
+        assert!(without_learning
+            .components
+            .iter()
+            .all(|component| component.id != "guruterminal.memory/learning"));
+        assert_eq!(
+            component(&with_learning, "guruterminal.memory/learning").tool_names,
+            vec!["memory_patch_propose".to_owned()]
+        );
     }
 
     #[test]

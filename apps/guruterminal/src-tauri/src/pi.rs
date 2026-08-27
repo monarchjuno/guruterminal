@@ -65,11 +65,13 @@ const RPC_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const PI_PROJECT_SETTINGS_MAX_BYTES: u64 = 128;
 // Do not inherit a user/global transport timeout here: this process is an
 // app-owned Chat runtime and its stop behavior is part of the product contract.
-const PI_PROJECT_SETTINGS: &[u8] = b"{\"transport\":\"sse\",\"httpIdleTimeoutMs\":300000}\n";
+const PI_PROJECT_SETTINGS: &[u8] = b"{\"transport\":\"auto\",\"httpIdleTimeoutMs\":300000}\n";
+const PREVIOUS_PI_PROJECT_SETTINGS: &[u8] =
+    b"{\"transport\":\"sse\",\"httpIdleTimeoutMs\":300000}\n";
 /// Versioned identity of the app-owned Pi cache environment. Bump this when a
 /// change makes an existing derived Pi JSONL unsafe to resume (for example,
 /// its CWD, transport, or extension/session contract changes).
-pub(crate) const PI_SESSION_CACHE_POLICY_VERSION: &str = "stable-session-cwd-sse/v6";
+pub(crate) const PI_SESSION_CACHE_POLICY_VERSION: &str = "stable-session-cwd-auto/v7";
 
 #[derive(Debug, Error)]
 pub enum PiError {
@@ -320,8 +322,8 @@ impl PiLaunchConfig {
 }
 
 /// Installs the fixed transport policy in the caller's stable, app-private
-/// Chat CWD. Existing contents are never overwritten: a changed file is a
-/// launch failure rather than an opportunity to trust altered project input.
+/// Chat CWD. Only an exact prior app-owned policy is upgraded; every other
+/// existing value is a launch failure rather than trusted project input.
 fn ensure_pi_project_settings(config: &PiLaunchConfig) -> Result<(), PiError> {
     let directory = config.working_dir.join(".pi");
     ensure_private_directory(&directory).map_err(|_| PiError::InvalidLaunchValue)?;
@@ -332,6 +334,23 @@ fn ensure_pi_project_settings(config: &PiLaunchConfig) -> Result<(), PiError> {
                 .map_err(|_| PiError::InvalidLaunchValue)?;
             if existing == PI_PROJECT_SETTINGS {
                 return Ok(());
+            }
+            if existing == PREVIOUS_PI_PROJECT_SETTINGS {
+                let mut options = OpenOptions::new();
+                options.write(true).truncate(true);
+                #[cfg(unix)]
+                options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+                #[cfg(windows)]
+                add_open_reparse_point_flag(&mut options);
+                let mut file = options.open(&path)?;
+                std::io::Write::write_all(&mut file, PI_PROJECT_SETTINGS)?;
+                file.sync_all()?;
+                let verified =
+                    read_private_regular_file_bounded(&path, PI_PROJECT_SETTINGS_MAX_BYTES)
+                        .map_err(|_| PiError::InvalidLaunchValue)?;
+                return (verified == PI_PROJECT_SETTINGS)
+                    .then_some(())
+                    .ok_or(PiError::InvalidLaunchValue);
             }
             return Err(PiError::InvalidLaunchValue);
         }

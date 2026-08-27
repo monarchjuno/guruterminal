@@ -1,5 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
 struct UnusedExecutor;
 
@@ -26,6 +28,43 @@ fn policy() -> ToolPolicy {
     }
 }
 
+#[cfg(unix)]
+async fn broker_request(socket_path: &PathBuf, token: &str, id: &str, method: &str) -> Value {
+    let mut stream = UnixStream::connect(socket_path).await.unwrap();
+    let request = json!({
+        "protocol": PROTOCOL,
+        "id": id,
+        "token": token,
+        "method": method,
+        "params": {}
+    });
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let response = serde_json::from_str::<Value>(&line).unwrap();
+    let ack = json!({
+        "protocol": PROTOCOL,
+        "id": id,
+        "delivered": true
+    });
+    reader
+        .get_mut()
+        .write_all(format!("{ack}\n").as_bytes())
+        .await
+        .unwrap();
+    line.clear();
+    reader.read_line(&mut line).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["committed"],
+        true
+    );
+    response
+}
+
 #[test]
 fn broker_endpoint_matches_the_platform_transport_namespace() {
     let logical = PathBuf::from("run").join("broker.sock");
@@ -38,6 +77,143 @@ fn broker_endpoint_matches_the_platform_transport_namespace() {
         assert!(text.starts_with(r"\\.\pipe\guruterminal-tool-"));
         assert_eq!(text.len(), r"\\.\pipe\guruterminal-tool-".len() + 32);
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn broker_identity_is_idle_between_sequential_instances() {
+    let temporary = tempfile::tempdir().unwrap();
+    let socket_path = temporary.path().join("reusable-broker.sock");
+    let identity = ToolBrokerIdentity::new(socket_path.clone());
+
+    assert!(
+        !socket_path.exists(),
+        "idle identity must not accept clients"
+    );
+    let first = identity
+        .start(policy(), Arc::new(UnusedExecutor))
+        .await
+        .unwrap();
+    assert!(socket_path.exists());
+    assert_eq!(first.token(), identity.token());
+
+    let concurrent = identity.start(policy(), Arc::new(UnusedExecutor)).await;
+    assert!(matches!(
+        concurrent,
+        Err(BrokerError::Io(ref error)) if error.kind() == io::ErrorKind::AddrInUse
+    ));
+
+    first.shutdown().await.unwrap();
+    assert!(
+        !socket_path.exists(),
+        "shutdown must remove the accepting endpoint before releasing identity"
+    );
+
+    let second = identity
+        .start(policy(), Arc::new(UnusedExecutor))
+        .await
+        .unwrap();
+    assert_eq!(second.token(), identity.token());
+    second.shutdown().await.unwrap();
+    assert!(!socket_path.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn broker_identity_rejects_a_stale_endpoint_without_removing_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let socket_path = temporary.path().join("stale-broker.sock");
+    std::fs::write(&socket_path, b"not a broker").unwrap();
+    let identity = ToolBrokerIdentity::new(socket_path.clone());
+
+    let result = identity.start(policy(), Arc::new(UnusedExecutor)).await;
+    assert!(matches!(
+        result,
+        Err(BrokerError::Io(ref error)) if error.kind() == io::ErrorKind::AddrInUse
+    ));
+    assert_eq!(std::fs::read(&socket_path).unwrap(), b"not a broker");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sequential_brokers_do_not_share_policy_executor_or_cardinality() {
+    #[derive(Default)]
+    struct Executor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for Executor {
+        async fn execute(
+            &self,
+            policy: &ToolPolicy,
+            _method: ToolMethod,
+            _params: Value,
+        ) -> Result<Value, BrokerError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({
+                "guruId": policy.guru_id,
+                "sessionId": policy.session_id,
+                "useMemory": policy.use_memory
+            }))
+        }
+    }
+
+    let temporary = tempfile::tempdir().unwrap();
+    let socket_path = temporary.path().join("turn-scoped-broker.sock");
+    let identity = ToolBrokerIdentity::new(socket_path.clone());
+    let first_executor = Arc::new(Executor::default());
+    let mut first_policy = policy();
+    first_policy.guru_id = "guru-first".into();
+    first_policy.session_id = "session-first".into();
+    first_policy.use_memory = true;
+    let first = identity
+        .start(first_policy, first_executor.clone())
+        .await
+        .unwrap();
+
+    let first_memory =
+        broker_request(&socket_path, first.token(), "first-memory", "guru.search").await;
+    assert_eq!(first_memory["ok"], true);
+    assert_eq!(first_memory["result"]["sessionId"], "session-first");
+    let first_decision = broker_request(
+        &socket_path,
+        first.token(),
+        "first-decision",
+        "decision.submit",
+    )
+    .await;
+    assert_eq!(first_decision["ok"], true);
+    first.shutdown().await.unwrap();
+
+    let second_executor = Arc::new(Executor::default());
+    let mut second_policy = policy();
+    second_policy.guru_id = "guru-second".into();
+    second_policy.session_id = "session-second".into();
+    second_policy.use_memory = false;
+    let second = identity
+        .start(second_policy, second_executor.clone())
+        .await
+        .unwrap();
+
+    let denied_memory =
+        broker_request(&socket_path, second.token(), "second-memory", "guru.search").await;
+    assert_eq!(denied_memory["ok"], false);
+    assert_eq!(denied_memory["error"]["code"], "memory_disabled");
+    let fresh_decision = broker_request(
+        &socket_path,
+        second.token(),
+        "second-decision",
+        "decision.submit",
+    )
+    .await;
+    assert_eq!(fresh_decision["ok"], true);
+    assert_eq!(fresh_decision["result"]["guruId"], "guru-second");
+    assert_eq!(fresh_decision["result"]["sessionId"], "session-second");
+    second.shutdown().await.unwrap();
+
+    assert_eq!(first_executor.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(second_executor.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
