@@ -70,7 +70,11 @@ eligibility class.
 instruction reads, and `run_results_list` are control metadata rather than
 data reads, so they do not receive `result_ref` values.
 
-The deterministic finance worker has no network access. Compute has no network,
+The deterministic finance worker has no network access. `finance_calculate`
+accepts an ordered batch of up to 64 independent operations; the batch shares
+one worker spawn, handshake, scratch directory, deadline, and shutdown while
+preserving an item-scoped success or error for every input. Invalid-only
+batches are rejected without launching the worker. Compute has no network,
 host filesystem, or Memory access. Korea Investment is read-only; orders are
 not in its inventory. Web search routing is a Marketplace setting rather than
 a model-selected provider.

@@ -5,7 +5,7 @@ use std::{cmp::Ordering, collections::BTreeSet, env, fs::OpenOptions, io::Read, 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use crate::{app::CommandError, artifact_trust::ensure_private_regular_file};
+use crate::{app::CommandError, artifact_trust::ensure_private_regular_file, hashing::sha256};
 
 const MAX_AUTH_FILE_BYTES: u64 = 64 * 1024;
 const MAX_MODEL_ID_BYTES: usize = 512;
@@ -668,6 +668,19 @@ pub fn catalog_view(
 ) -> Result<ModelCatalogView, CommandError> {
     visibility.validate()?;
     let provider_options = provider_options();
+    // auth.json is bounded but may sit on a slower user-data volume. Read and
+    // validate it once per view instead of once per model (provider catalogs
+    // can contain thousands of entries) and once again per provider.
+    let saved_auth = read_auth_map(&agent_data_dir.join("auth.json"))?;
+    let credential_sources = provider_options
+        .iter()
+        .map(|provider| {
+            (
+                provider.id,
+                credential_source_from_auth(&saved_auth, provider.id),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     let provider_order = provider_options
         .iter()
         .enumerate()
@@ -677,13 +690,10 @@ pub fn catalog_view(
         .models
         .iter()
         .map(|model| {
-            let credential_source = if saved_credential_exists(agent_data_dir, &model.provider)? {
-                CredentialSource::Saved
-            } else if provider_credential_from_environment(&model.provider).is_some() {
-                CredentialSource::Environment
-            } else {
-                CredentialSource::Missing
-            };
+            let credential_source = credential_sources
+                .get(model.provider.as_str())
+                .copied()
+                .unwrap_or(CredentialSource::Missing);
             Ok(ConfiguredModelView {
                 id: model.id.clone(),
                 name: model.name.clone(),
@@ -714,7 +724,10 @@ pub fn catalog_view(
     let providers = provider_options
         .into_iter()
         .map(|mut provider| {
-            provider.credential_source = credential_source(agent_data_dir, provider.id)?;
+            provider.credential_source = credential_sources
+                .get(provider.id)
+                .copied()
+                .unwrap_or(CredentialSource::Missing);
             Ok(provider)
         })
         .collect::<Result<Vec<_>, CommandError>>()?;
@@ -782,25 +795,67 @@ fn numeric_runs(value: &str) -> Vec<u64> {
     numbers
 }
 
-pub(crate) fn saved_credential_exists(
+/// Returns a secret-free, process-local cache generation for the credential
+/// authority Pi will use for this provider. Environment credentials take the
+/// same precedence as the provider support launch path. OAuth access tokens and
+/// expiry timestamps are deliberately excluded: routine token refresh must not
+/// invalidate a model catalog, while a refresh-token or account replacement
+/// still rotates the generation.
+pub(crate) fn provider_credential_generation(
     agent_data_dir: &Path,
     provider: &str,
-) -> Result<bool, CommandError> {
-    let auth_path = agent_data_dir.join("auth.json");
-    let auth = read_auth_map(&auth_path)?;
-    Ok(auth.get(provider).is_some_and(valid_saved_credential))
+) -> Result<Option<String>, CommandError> {
+    let (source, secret) =
+        if let Some((name, secret)) = provider_credential_from_environment(provider) {
+            (format!("environment:{name}"), secret)
+        } else {
+            let auth = read_auth_map(&agent_data_dir.join("auth.json"))?;
+            let Some(entry) = auth
+                .get(provider)
+                .filter(|entry| valid_saved_credential(entry))
+            else {
+                return Ok(None);
+            };
+            let Some(entry) = entry.as_object() else {
+                return Ok(None);
+            };
+            match entry.get("type").and_then(Value::as_str) {
+                Some("api_key") => (
+                    "saved:api_key".to_owned(),
+                    entry
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+                Some("oauth") => (
+                    "saved:oauth".to_owned(),
+                    entry
+                        .get("refresh")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+                _ => return Ok(None),
+            }
+        };
+    let mut material = Vec::with_capacity(provider.len() + source.len() + secret.len() + 64);
+    material.extend_from_slice(b"guruterminal/provider-credential-generation/v1\0");
+    material.extend_from_slice(provider.as_bytes());
+    material.push(0);
+    material.extend_from_slice(source.as_bytes());
+    material.push(0);
+    material.extend_from_slice(secret.as_bytes());
+    Ok(Some(sha256(&material)))
 }
 
-fn credential_source(
-    agent_data_dir: &Path,
-    provider: &str,
-) -> Result<CredentialSource, CommandError> {
-    if saved_credential_exists(agent_data_dir, provider)? {
-        Ok(CredentialSource::Saved)
+fn credential_source_from_auth(auth: &Map<String, Value>, provider: &str) -> CredentialSource {
+    if auth.get(provider).is_some_and(valid_saved_credential) {
+        CredentialSource::Saved
     } else if provider_credential_from_environment(provider).is_some() {
-        Ok(CredentialSource::Environment)
+        CredentialSource::Environment
     } else {
-        Ok(CredentialSource::Missing)
+        CredentialSource::Missing
     }
 }
 
@@ -959,6 +1014,61 @@ mod tests {
         assert!(!visibility.is_visible("fixture"));
         let serialized = serde_json::to_string(&view).unwrap();
         assert!(!serialized.contains("secret-value"));
+    }
+
+    #[test]
+    fn provider_credential_generation_ignores_oauth_access_refresh_but_rotates_with_authority() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_auth_fixture(
+            temporary.path(),
+            serde_json::json!({
+                "openai-codex": {
+                    "type": "oauth",
+                    "access": "access-one",
+                    "refresh": "authority-one",
+                    "expires": 1_900_000_000_000_u64
+                }
+            }),
+        );
+        let first = provider_credential_generation(temporary.path(), "openai-codex")
+            .unwrap()
+            .unwrap();
+
+        write_auth_fixture(
+            temporary.path(),
+            serde_json::json!({
+                "openai-codex": {
+                    "type": "oauth",
+                    "access": "access-two",
+                    "refresh": "authority-one",
+                    "expires": 1_900_000_100_000_u64
+                }
+            }),
+        );
+        assert_eq!(
+            provider_credential_generation(temporary.path(), "openai-codex")
+                .unwrap()
+                .unwrap(),
+            first
+        );
+
+        write_auth_fixture(
+            temporary.path(),
+            serde_json::json!({
+                "openai-codex": {
+                    "type": "oauth",
+                    "access": "access-three",
+                    "refresh": "authority-two",
+                    "expires": 1_900_000_200_000_u64
+                }
+            }),
+        );
+        assert_ne!(
+            provider_credential_generation(temporary.path(), "openai-codex")
+                .unwrap()
+                .unwrap(),
+            first
+        );
     }
 
     #[test]

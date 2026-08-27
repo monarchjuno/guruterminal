@@ -16,6 +16,9 @@ const FINANCE_CALCULATE_OPERATIONS: &[&str] = &[
     "weighted_average_cost_of_capital",
 ];
 
+const MAX_FINANCE_CALCULATE_OPERATIONS: usize = 64;
+const FINANCE_CALCULATE_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
+
 const FINANCE_HOST_ARGUMENT_KEYS: &[&str] = &["as_of"];
 
 const FINANCE_DECIMAL_SCALAR_KEYS: &[&str] = &[
@@ -180,13 +183,48 @@ fn validate_finance_calculate_arguments(
     reject_grouped_decimals(arguments)
 }
 
-fn parse_finance_calculate_params(params: &Value) -> Result<(&str, Value), BrokerError> {
-    let object = params.as_object().ok_or_else(|| {
-        finance_execution("finance_calculate requires an object with operation and arguments")
-    })?;
+#[derive(Debug)]
+struct FinanceCalculation {
+    index: usize,
+    id: String,
+    operation: String,
+    arguments: Value,
+}
+
+struct PreparedFinanceCalculation {
+    index: usize,
+    id: String,
+    operation: String,
+    arguments: Value,
+    context: Value,
+}
+
+fn finance_calculate_item_error(
+    index: usize,
+    id: Option<&str>,
+    operation: Option<&str>,
+    code: &str,
+    message: impl Into<String>,
+) -> Value {
+    json!({
+        "index": index,
+        "id": id,
+        "operation": operation,
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message.into(),
+        }
+    })
+}
+
+fn parse_finance_calculate_params(params: &Value) -> Result<&[Value], BrokerError> {
+    let object = params
+        .as_object()
+        .ok_or_else(|| finance_execution("finance_calculate requires an object with operations"))?;
     let extra = object
         .keys()
-        .filter(|key| key.as_str() != "operation" && key.as_str() != "arguments")
+        .filter(|key| key.as_str() != "operations")
         .cloned()
         .collect::<Vec<_>>();
     if !extra.is_empty() {
@@ -195,23 +233,112 @@ fn parse_finance_calculate_params(params: &Value) -> Result<(&str, Value), Broke
             extra.join(", ")
         )));
     }
-    let operation = object
-        .get("operation")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            finance_execution("finance_calculate.operation must be a known calculation name")
-        })?;
-    if !FINANCE_CALCULATE_OPERATIONS.contains(&operation) {
-        return Err(BrokerError::MethodDenied);
+    let operations = object
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or_else(|| finance_execution("finance_calculate.operations must be an array"))?;
+    if operations.is_empty() || operations.len() > MAX_FINANCE_CALCULATE_OPERATIONS {
+        return Err(finance_execution(format!(
+            "finance_calculate.operations must contain 1-{MAX_FINANCE_CALCULATE_OPERATIONS} items"
+        )));
     }
-    let arguments = object
-        .get("arguments")
-        .ok_or_else(|| finance_execution("finance_calculate.arguments must be an object"))?;
-    let argument_object = arguments
-        .as_object()
-        .ok_or_else(|| finance_execution("finance_calculate.arguments must be an object"))?;
-    validate_finance_calculate_arguments(operation, argument_object)?;
-    Ok((operation, arguments.clone()))
+    Ok(operations)
+}
+
+fn parse_finance_calculation(value: &Value, index: usize) -> Result<FinanceCalculation, Value> {
+    let Some(object) = value.as_object() else {
+        return Err(finance_calculate_item_error(
+            index,
+            None,
+            None,
+            "invalid_request",
+            format!("finance_calculate operations[{index}] must be an object"),
+        ));
+    };
+    let candidate_id = object.get("id").and_then(Value::as_str);
+    let candidate_operation = object.get("operation").and_then(Value::as_str);
+    let extra = object
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "id" | "operation" | "arguments"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !extra.is_empty() {
+        return Err(finance_calculate_item_error(
+            index,
+            candidate_id,
+            candidate_operation,
+            "invalid_request",
+            format!(
+                "finance_calculate operations[{index}] does not accept fields: {}",
+                extra.join(", ")
+            ),
+        ));
+    }
+    let id = candidate_id.filter(|id| !id.is_empty() && id.chars().count() <= 64);
+    let Some(id) = id else {
+        return Err(finance_calculate_item_error(
+            index,
+            None,
+            candidate_operation,
+            "invalid_request",
+            format!("finance_calculate operations[{index}].id must be a string of 1-64 characters"),
+        ));
+    };
+    let Some(operation) = candidate_operation else {
+        return Err(finance_calculate_item_error(
+            index,
+            Some(id),
+            None,
+            "invalid_request",
+            format!(
+                "finance_calculate operations[{index}].operation must be a known calculation name"
+            ),
+        ));
+    };
+    if !FINANCE_CALCULATE_OPERATIONS.contains(&operation) {
+        return Err(finance_calculate_item_error(
+            index,
+            Some(id),
+            Some(operation),
+            "operation_denied",
+            format!(
+                "finance_calculate operations[{index}].operation is not an allowlisted calculation"
+            ),
+        ));
+    }
+    let Some(arguments) = object.get("arguments") else {
+        return Err(finance_calculate_item_error(
+            index,
+            Some(id),
+            Some(operation),
+            "invalid_arguments",
+            format!("finance_calculate operations[{index}].arguments must be an object"),
+        ));
+    };
+    let Some(argument_object) = arguments.as_object() else {
+        return Err(finance_calculate_item_error(
+            index,
+            Some(id),
+            Some(operation),
+            "invalid_arguments",
+            format!("finance_calculate operations[{index}].arguments must be an object"),
+        ));
+    };
+    if let Err(error) = validate_finance_calculate_arguments(operation, argument_object) {
+        return Err(finance_calculate_item_error(
+            index,
+            Some(id),
+            Some(operation),
+            "invalid_arguments",
+            error.to_string(),
+        ));
+    }
+    Ok(FinanceCalculation {
+        index,
+        id: id.to_owned(),
+        operation: operation.to_owned(),
+        arguments: arguments.clone(),
+    })
 }
 
 impl AppToolExecutor {
@@ -222,12 +349,88 @@ impl AppToolExecutor {
         _delivery_id: &str,
     ) -> Result<Value, BrokerError> {
         self.require_capability("guruterminal.finance-core")?;
-        let (operation, mut arguments) = parse_finance_calculate_params(&params)?;
-        let (context, resolved) = self
-            .resolve_finance_calculation(policy, operation, &mut arguments)
-            .await?;
-        self.finance_worker_call_with_context(operation, resolved, context)
-            .await
+        let operations = parse_finance_calculate_params(&params)?;
+        let mut results = vec![None; operations.len()];
+        let mut prepared = Vec::with_capacity(operations.len());
+        for (index, value) in operations.iter().enumerate() {
+            let calculation = match parse_finance_calculation(value, index) {
+                Ok(calculation) => calculation,
+                Err(error) => {
+                    results[index] = Some(error);
+                    continue;
+                }
+            };
+            let mut arguments = calculation.arguments;
+            match self
+                .resolve_finance_calculation(policy, &calculation.operation, &mut arguments)
+                .await
+            {
+                Ok((context, arguments)) => prepared.push(PreparedFinanceCalculation {
+                    index: calculation.index,
+                    id: calculation.id,
+                    operation: calculation.operation,
+                    arguments,
+                    context,
+                }),
+                Err(error) => {
+                    results[index] = Some(finance_calculate_item_error(
+                        index,
+                        Some(&calculation.id),
+                        Some(&calculation.operation),
+                        "invalid_arguments",
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+
+        if !prepared.is_empty() {
+            let metadata = prepared
+                .iter()
+                .map(|calculation| {
+                    (
+                        calculation.index,
+                        calculation.id.clone(),
+                        calculation.operation.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let calls = prepared
+                .into_iter()
+                .map(|calculation| crate::finance::FinanceToolCall {
+                    name: calculation.operation,
+                    arguments: calculation.arguments,
+                    context: calculation.context,
+                })
+                .collect();
+            let worker_results = self.finance_worker_call_batch(calls).await?;
+            for ((index, id, operation), result) in metadata.into_iter().zip(worker_results) {
+                results[index] = Some(match result {
+                    Ok(result) => json!({
+                        "index": index,
+                        "id": id,
+                        "operation": operation,
+                        "ok": true,
+                        "result": result,
+                    }),
+                    Err(error) => finance_calculate_item_error(
+                        index,
+                        Some(&id),
+                        Some(&operation),
+                        "worker_error",
+                        error.to_string(),
+                    ),
+                });
+            }
+        }
+
+        let results = results
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                finance_execution("finance_calculate did not produce a result for every operation")
+            })?;
+        Ok(json!({ "results": results }))
     }
 
     async fn resolve_finance_calculation(
@@ -581,12 +784,10 @@ impl AppToolExecutor {
         Err(BrokerError::MethodDenied)
     }
 
-    pub(super) async fn finance_worker_call_with_context(
+    async fn finance_worker_call_batch(
         &self,
-        operation: &str,
-        arguments: Value,
-        context: Value,
-    ) -> Result<Value, BrokerError> {
+        calls: Vec<crate::finance::FinanceToolCall>,
+    ) -> Result<Vec<Result<Value, crate::finance::FinanceError>>, BrokerError> {
         let executable = self
             .state
             .artifacts
@@ -609,21 +810,21 @@ impl AppToolExecutor {
         let (worker, handshake) = FinanceWorker::spawn(config)
             .await
             .map_err(|error| BrokerError::Execution(error.to_string()))?;
-        if !handshake.tools.iter().any(|name| name == operation) {
+        if calls
+            .iter()
+            .any(|call| !handshake.tools.iter().any(|name| name == &call.name))
+        {
             let _ = worker.shutdown(Duration::from_secs(1)).await;
             return Err(BrokerError::MethodDenied);
         }
-        let result = worker
-            .call_tool(operation, arguments, context, Duration::from_secs(30))
-            .await
-            .map_err(|error| BrokerError::Execution(error.to_string()));
+        let results = worker
+            .call_tools_ordered(calls, FINANCE_CALCULATE_BATCH_TIMEOUT)
+            .await;
         let shutdown = worker
             .shutdown(Duration::from_secs(1))
             .await
             .map_err(|error| BrokerError::Execution(error.to_string()));
-        match (result, shutdown) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-        }
+        shutdown?;
+        Ok(results)
     }
 }
