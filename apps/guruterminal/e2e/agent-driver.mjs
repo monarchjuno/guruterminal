@@ -183,15 +183,18 @@ async function openModelMenu(browser, trigger) {
     }
     return null;
   };
+  const alreadyOpen = await waitForMenu();
+  if (alreadyOpen) return alreadyOpen;
   await trigger.click();
   let menu = await waitForMenu();
   for (const key of ["Space", "Enter"]) {
-    if (menu) return;
+    if (menu) return menu;
     await browser.keys("Escape");
     await browser.keys(key);
     menu = await waitForMenu();
   }
   if (!menu) throw new Error("Chat model menu did not open");
+  return menu;
 }
 
 async function visibleModelMenu(browser) {
@@ -271,9 +274,20 @@ async function configureLunaMax(browser) {
       if (!(await chatModelControl.isEnabled())) {
         throw new Error(`Visible Chat model control is disabled: ${label}`);
       }
-      await openModelMenu(browser, chatModelControl);
-      await clickVisibleMenuItem(browser, "menuitemradio", "GPT-5.6 Luna");
-      await clickVisibleMenuItem(browser, "menuitemradio", "max");
+      try {
+        await openModelMenu(browser, chatModelControl);
+        await clickVisibleMenuItem(browser, "menuitemradio", "GPT-5.6 Luna");
+        await clickVisibleMenuItem(browser, "menuitemradio", "max");
+      } catch (error) {
+        const menu = await browser.$('[aria-label="Available models"]');
+        if (!(await menu.isExisting())) throw error;
+        await browser.keys("GPT-5.6 Luna");
+        await browser.keys("Enter");
+        await browser.pause(1_100);
+        await browser.keys("max");
+        await browser.keys("Enter");
+        await browser.keys("Escape");
+      }
       label = await (await displayed(browser, chatModel)).getText();
     }
     if (!/GPT-5\.6 Luna/i.test(label) || !/\bmax\b/i.test(label)) {
@@ -298,6 +312,8 @@ async function dumpProgress(browser, latestOnly = false) {
 async function waitForChatIdle(browser) {
   await browser.waitUntil(
     async () => {
+      const runningComposer = await browser.$(".composer-running");
+      if (await visible(runningComposer)) return false;
       const stop = await browser.$('button[aria-label="Stop response"]');
       if (await visible(stop)) return false;
       for (const assistant of await browser.$$(
