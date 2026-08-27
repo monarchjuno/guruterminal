@@ -2,9 +2,19 @@ use super::*;
 
 pub fn check(root: &Path) -> KnowledgeCheck {
     let docs = catalog_local_unchecked(root);
-    let mut issues = layout_issues(root);
+    check_documents(root, &docs)
+}
+
+pub(super) fn check_documents(root: &Path, docs: &[Document]) -> KnowledgeCheck {
+    check_documents_with_layout(docs, layout_issues(root))
+}
+
+pub(super) fn check_documents_with_layout(
+    docs: &[Document],
+    mut issues: Vec<KnowledgeIssue>,
+) -> KnowledgeCheck {
     let mut ids = BTreeMap::<String, String>::new();
-    for doc in &docs {
+    for doc in docs {
         for issue in validate_document(doc) {
             issues.push(issue);
         }
@@ -23,7 +33,7 @@ pub fn check(root: &Path) -> KnowledgeCheck {
         .filter(|doc| !doc.id.is_empty())
         .map(|doc| (doc.id.as_str(), doc.kind.as_str()))
         .collect::<BTreeMap<_, _>>();
-    for doc in &docs {
+    for doc in docs {
         if let Some(revoked_by) = doc
             .revoked_by
             .as_deref()
@@ -99,12 +109,16 @@ pub fn health(root: &Path, kind: Option<&str>) -> Result<KnowledgeHealth, String
         }
     }
     let docs = catalog_local(root);
+    Ok(health_documents(&docs, kind))
+}
+
+pub(super) fn health_documents(docs: &[Document], kind: Option<&str>) -> KnowledgeHealth {
     let kinds = CanonicalMemoryKind::ALL
         .iter()
         .filter(|candidate| kind.is_none_or(|wanted| wanted == candidate.slug()))
-        .map(|kind| kind_health(&docs, kind.slug()))
+        .map(|kind| kind_health(docs, kind.slug()))
         .collect();
-    Ok(KnowledgeHealth { kinds })
+    KnowledgeHealth { kinds }
 }
 
 pub(super) fn kind_health(docs: &[Document], kind: &str) -> KindHealth {

@@ -1,6 +1,7 @@
 //! File-native knowledge records. Markdown is canonical; no index is kept.
 
 mod catalog;
+mod context;
 mod frontmatter;
 mod health;
 mod model;
@@ -10,6 +11,7 @@ mod semantic;
 
 use catalog::*;
 pub use catalog::{catalog_local, read};
+pub use context::context;
 use health::*;
 pub use health::{check, health};
 use query::*;

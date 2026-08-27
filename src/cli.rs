@@ -44,7 +44,70 @@ fn knowledge_command(arguments: &[String]) -> Result<(), String> {
         "read" => knowledge_read(rest),
         "check" => knowledge_check(rest),
         "health" => knowledge_health(rest),
+        "context" => knowledge_context(rest),
         other => Err(format!("unknown knowledge command: {other}")),
+    }
+}
+
+fn knowledge_context(arguments: &[String]) -> Result<(), String> {
+    let parsed = Options::parse(
+        arguments,
+        &[
+            "json",
+            "workspace",
+            "check",
+            "health",
+            "revision",
+            "learned-index",
+            "charter",
+        ],
+    )?;
+    let usage = "usage: guruterminal-core knowledge context [--check] [--health] [--revision] [--learned-index] [--charter] [--workspace PATH] --json";
+    no_positionals(&parsed, usage)?;
+    if !parsed.json {
+        return Err(format!("{usage}; --json is required"));
+    }
+    if !["check", "health", "revision", "learned-index", "charter"]
+        .iter()
+        .any(|name| parsed.has_flag(name))
+    {
+        return Err(usage.into());
+    }
+    let root = PathBuf::from(parsed.value("workspace").unwrap_or("."));
+    workspace::require_workspace(&root)?;
+    let result = knowledge::context(&root)?;
+
+    #[derive(Serialize)]
+    struct ContextOutput<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        check: Option<&'a knowledge::KnowledgeCheck>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        health: Option<&'a knowledge::KnowledgeHealth>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        revision: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        records: Option<&'a Vec<knowledge::Document>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        charter: Option<&'a Option<knowledge::KnowledgeCharterRead>>,
+    }
+
+    emit(
+        &ContextOutput {
+            check: parsed.has_flag("check").then_some(&result.check),
+            health: parsed.has_flag("health").then_some(&result.health),
+            revision: parsed
+                .has_flag("revision")
+                .then_some(result.revision.as_str()),
+            records: parsed.has_flag("learned-index").then_some(&result.records),
+            charter: parsed.has_flag("charter").then_some(&result.charter),
+        },
+        true,
+        None,
+    )?;
+    if parsed.has_flag("check") && !result.check.valid {
+        Err("knowledge check failed".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -329,7 +392,16 @@ impl Options {
                     return Err("--json may be supplied only once".into());
                 }
                 json = true;
-            } else if matches!(argument.as_str(), "--candidates" | "--include-revoked") {
+            } else if matches!(
+                argument.as_str(),
+                "--candidates"
+                    | "--include-revoked"
+                    | "--check"
+                    | "--health"
+                    | "--revision"
+                    | "--learned-index"
+                    | "--charter"
+            ) {
                 let name = argument.trim_start_matches('-');
                 if !allowed.contains(&name) || flags.iter().any(|flag| flag == name) {
                     return Err(format!("{argument} may be supplied only once"));
@@ -399,13 +471,13 @@ fn no_positionals(options: &Options, usage: &str) -> Result<(), String> {
 
 fn print_help() {
     println!(
-        "guruterminal-core {}\n\nINTERNAL USE ONLY\n\nUSAGE:\n    guruterminal-core init [workspace] [--json]\n    guruterminal-core knowledge <list|search|read|check|health> ...",
+        "guruterminal-core {}\n\nINTERNAL USE ONLY\n\nUSAGE:\n    guruterminal-core init [workspace] [--json]\n    guruterminal-core knowledge <list|search|read|check|health|context> ...",
         env!("CARGO_PKG_VERSION")
     );
 }
 
 fn print_knowledge_help() {
     println!(
-        "Knowledge commands:\n    guruterminal-core knowledge search <query> [--kind KIND]... [--limit N] [--candidates] [--include-revoked] [--as-of YYYY-MM-DD] [--workspace PATH] [--json]\n    guruterminal-core knowledge read <id> [--section NAME] [--workspace PATH] [--json]\n    guruterminal-core knowledge list [--kind KIND] [--workspace PATH] [--json]\n    guruterminal-core knowledge check [--workspace PATH] [--json]\n    guruterminal-core knowledge health [--kind KIND] [--workspace PATH] [--json]"
+        "Knowledge commands:\n    guruterminal-core knowledge search <query> [--kind KIND]... [--limit N] [--candidates] [--include-revoked] [--as-of YYYY-MM-DD] [--workspace PATH] [--json]\n    guruterminal-core knowledge read <id> [--section NAME] [--workspace PATH] [--json]\n    guruterminal-core knowledge list [--kind KIND] [--workspace PATH] [--json]\n    guruterminal-core knowledge check [--workspace PATH] [--json]\n    guruterminal-core knowledge health [--kind KIND] [--workspace PATH] [--json]\n    guruterminal-core knowledge context [--check] [--health] [--revision] [--learned-index] [--charter] [--workspace PATH] --json"
     );
 }

@@ -304,6 +304,22 @@ impl BoundGuruRoot {
         }
     }
 
+    pub(crate) async fn knowledge_context(
+        &self,
+        runtime: &GuruTerminalRuntime,
+    ) -> Result<Value, RuntimeError> {
+        #[cfg(unix)]
+        {
+            runtime.knowledge_context_at(&self.pinned).await
+        }
+        #[cfg(not(unix))]
+        {
+            #[cfg(windows)]
+            let _operation_guard = self.windows_operation_guard(true)?;
+            runtime.knowledge_context(&self.path).await
+        }
+    }
+
     pub(crate) fn inspect_memory_tree(
         &self,
     ) -> Result<(String, Vec<SnapshotRecord>), SnapshotError> {

@@ -27,6 +27,118 @@ fn record(kind: &str, id: &str, title: &str) -> String {
 }
 
 #[test]
+fn knowledge_context_composes_validation_revision_records_and_charter() {
+    let root = temp_dir("knowledge-context");
+    init(&root);
+    fs::write(
+        root.join("guruterminal/wiki/company.md"),
+        record("wiki", "wiki:company", "Company"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("guruterminal/lens/charter.md"),
+        "---\nid: lens:charter\ntitle: Charter\nsummary: Standing philosophy.\nas_of: 2026-08-09T00:00:00Z\n---\n\n# Scope\n\nPrefer durable cash flows.\n",
+    )
+    .unwrap();
+
+    let all = command(&[
+        "knowledge",
+        "context",
+        "--check",
+        "--health",
+        "--revision",
+        "--learned-index",
+        "--charter",
+        "--workspace",
+        root.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        all.status.success(),
+        "{}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+    let value: Value = serde_json::from_slice(&all.stdout).unwrap();
+    assert_eq!(value["check"]["valid"], true);
+    assert_eq!(value["check"]["documents"], 2);
+    assert_eq!(value["records"].as_array().unwrap().len(), 2);
+    assert_eq!(value["charter"]["document"]["id"], "lens:charter");
+    assert!(value["charter"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Prefer durable cash flows."));
+    let revision = value["revision"].as_str().unwrap().to_owned();
+    assert_eq!(revision.len(), 64);
+    assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(
+        value["health"]["kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|kind| kind["kind"] == "wiki")
+            .unwrap()["documents"],
+        1
+    );
+
+    fs::write(
+        root.join("guruterminal/wiki/company.md"),
+        record("wiki", "wiki:company", "Company updated"),
+    )
+    .unwrap();
+    let revision_only = command(&[
+        "knowledge",
+        "context",
+        "--revision",
+        "--workspace",
+        root.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(revision_only.status.success());
+    let changed: Value = serde_json::from_slice(&revision_only.stdout).unwrap();
+    assert_ne!(changed["revision"], revision);
+    assert_eq!(changed.as_object().unwrap().len(), 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn knowledge_context_emits_structured_check_before_failing_closed() {
+    let root = temp_dir("knowledge-context-invalid");
+    init(&root);
+    fs::write(
+        root.join("guruterminal/wiki/invalid.md"),
+        "---\nid: wiki:invalid\ntitle: \nsummary: Missing title.\nas_of: 2026-08-09T00:00:00Z\n---\n",
+    )
+    .unwrap();
+
+    let output = command(&[
+        "knowledge",
+        "context",
+        "--check",
+        "--health",
+        "--revision",
+        "--learned-index",
+        "--charter",
+        "--workspace",
+        root.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["check"]["valid"], false);
+    assert!(value["check"]["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["field"] == "title"));
+    assert!(value["records"].as_array().unwrap().is_empty());
+    assert!(value["charter"].is_null());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("knowledge check failed"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn init_creates_only_the_guruterminal_v1_layout() {
     let root = temp_dir("init");
     init(&root);

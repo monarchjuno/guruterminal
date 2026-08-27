@@ -294,6 +294,20 @@ impl GuruTerminalRuntime {
         self.run_json(args).await
     }
 
+    /// Captures the validation, health, revision, list-compatible records,
+    /// and reserved charter projection in one Runtime process. The boundary
+    /// revision is compared with the child projection so path swaps and
+    /// concurrent external edits fail closed rather than returning a mixed
+    /// context.
+    pub async fn knowledge_context(&self, workspace: &Path) -> Result<Value, RuntimeError> {
+        let expected_revision = preflight_memory_tree_revision(workspace)?;
+        let value = self
+            .run_json(knowledge_context_args(workspace.as_os_str().to_owned()))
+            .await?;
+        validate_knowledge_context(&value, &expected_revision)?;
+        Ok(value)
+    }
+
     #[cfg(unix)]
     pub async fn knowledge_list_at(
         &self,
@@ -312,6 +326,16 @@ impl GuruTerminalRuntime {
             OsString::from("--json"),
         ]);
         self.run_json_at(root, args).await
+    }
+
+    #[cfg(unix)]
+    pub async fn knowledge_context_at(&self, root: &PinnedGuruRoot) -> Result<Value, RuntimeError> {
+        let expected_revision = preflight_memory_tree_revision_at(root)?;
+        let value = self
+            .run_json_at(root, knowledge_context_args(OsString::from(".")))
+            .await?;
+        validate_knowledge_context(&value, &expected_revision)?;
+        Ok(value)
     }
 
     pub async fn validate(&self, workspace: &Path) -> Result<(), RuntimeError> {
@@ -450,7 +474,13 @@ async fn execute_json_with_limits(
 fn runtime_failure_summary(stdout: &[u8], stderr: &[u8]) -> String {
     let structured_issue = serde_json::from_slice::<Value>(stdout)
         .ok()
-        .and_then(|value| value.get("errors").and_then(Value::as_array).cloned())
+        .and_then(|value| {
+            value
+                .get("errors")
+                .or_else(|| value.get("check").and_then(|check| check.get("errors")))
+                .and_then(Value::as_array)
+                .cloned()
+        })
         .and_then(|errors| errors.into_iter().next())
         .and_then(|issue| {
             Some(format!(
@@ -500,18 +530,75 @@ async fn terminate_runtime_child(child: &mut Child) {
 }
 
 fn preflight_memory_tree(workspace: &Path) -> Result<(), RuntimeError> {
+    preflight_memory_tree_revision(workspace).map(|_| ())
+}
+
+fn preflight_memory_tree_revision(workspace: &Path) -> Result<String, RuntimeError> {
     ensure_initialized_layout(workspace)?;
     crate::snapshot::inspect_memory_tree(workspace)
-        .map(|_| ())
+        .map(|(revision, _)| revision)
         .map_err(|_| RuntimeError::MemoryBoundary)
 }
 
 #[cfg(unix)]
 fn preflight_memory_tree_at(root: &PinnedGuruRoot) -> Result<(), RuntimeError> {
+    preflight_memory_tree_revision_at(root).map(|_| ())
+}
+
+#[cfg(unix)]
+fn preflight_memory_tree_revision_at(root: &PinnedGuruRoot) -> Result<String, RuntimeError> {
     ensure_initialized_layout_at(root)?;
     crate::snapshot::inspect_memory_tree_at(root)
-        .map(|_| ())
+        .map(|(revision, _)| revision)
         .map_err(|_| RuntimeError::MemoryBoundary)
+}
+
+fn knowledge_context_args(workspace: OsString) -> Vec<OsString> {
+    vec![
+        OsString::from("knowledge"),
+        OsString::from("context"),
+        OsString::from("--check"),
+        OsString::from("--health"),
+        OsString::from("--revision"),
+        OsString::from("--learned-index"),
+        OsString::from("--charter"),
+        OsString::from("--workspace"),
+        workspace,
+        OsString::from("--json"),
+    ]
+}
+
+fn validate_knowledge_context(value: &Value, expected_revision: &str) -> Result<(), RuntimeError> {
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_str)
+        .filter(|revision| {
+            revision.len() == 64
+                && revision
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .ok_or(RuntimeError::MalformedOutput)?;
+    if revision != expected_revision {
+        return Err(RuntimeError::MemoryBoundary);
+    }
+    if value
+        .get("check")
+        .and_then(|check| check.get("valid"))
+        .and_then(Value::as_bool)
+        != Some(true)
+        || !value
+            .get("health")
+            .and_then(|health| health.get("kinds"))
+            .is_some_and(Value::is_array)
+        || !value.get("records").is_some_and(Value::is_array)
+        || !value
+            .get("charter")
+            .is_some_and(|charter| charter.is_null() || charter.is_object())
+    {
+        return Err(RuntimeError::MalformedOutput);
+    }
+    Ok(())
 }
 
 fn ensure_kind(kind: &str) -> Result<(), RuntimeError> {
@@ -725,6 +812,39 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn composite_runtime_failure_reports_the_first_nested_check_issue() {
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = temporary
+            .path()
+            .join("guruterminal-composite-structured-error");
+        fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s\\n' '{\"check\":{\"valid\":false,\"documents\":1,\"errors\":[{\"path\":\"guruterminal/lens/gate.md\",\"field\":\"supports\",\"message\":\"target does not exist: evidence:missing\"}]}}'\nprintf '%s\\n' 'guruterminal-core: knowledge check failed' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let mut command = Command::new(executable);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        let error = execute_json_with_limits(&mut command, 4_096, 4_096)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::Runtime(message)
+                if message == "guruterminal/lens/gate.md: supports: target does not exist: evidence:missing"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn oversized_memory_is_rejected_before_the_runtime_child_starts() {
         let temporary = tempfile::tempdir().unwrap();
         let workspace = temporary.path().join("workspace");
@@ -783,6 +903,62 @@ mod tests {
             fs::read_to_string(moved_a.join("runtime-marker")).unwrap(),
             "A\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pinned_knowledge_context_uses_one_composite_child_and_sealed_revision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_a = temporary.path().join("guru-a");
+        let root_b = temporary.path().join("guru-b");
+        let moved_a = temporary.path().join("guru-a-original");
+        create_initialized_workspace(&root_a, "A");
+        create_initialized_workspace(&root_b, "B");
+        fs::write(
+            root_a.join("guruterminal/wiki/a.md"),
+            "---\nid: wiki:a\ntitle: A\nsummary: A\nas_of: 2026-01-01T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            root_b.join("guruterminal/wiki/b.md"),
+            "---\nid: wiki:b\ntitle: B\nsummary: B\nas_of: 2026-01-01T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        let expected_revision = crate::snapshot::inspect_memory_tree(&root_a).unwrap().0;
+        let pinned = PinnedGuruRoot::open_unbound(&root_a).unwrap();
+        let script = format!(
+            "#!/bin/sh\n\
+             [ \"$#\" -eq 10 ] && [ \"$1\" = knowledge ] && [ \"$2\" = context ] && \\
+             [ \"$3\" = --check ] && [ \"$4\" = --health ] && [ \"$5\" = --revision ] && \\
+             [ \"$6\" = --learned-index ] && [ \"$7\" = --charter ] && \\
+             [ \"$8\" = --workspace ] && [ \"$9\" = . ] && [ \"${{10}}\" = --json ] || exit 64\n\
+             IFS= read -r marker < runtime-marker\n\
+             printf '{{\"check\":{{\"valid\":true}},\"health\":{{\"kinds\":[]}},\"revision\":\"{expected_revision}\",\"records\":[{{\"marker\":\"%s\"}}],\"charter\":null}}\\n' \"$marker\"\n"
+        );
+        let runtime = write_test_runtime(temporary.path(), "guruterminal-context-test", &script);
+
+        fs::rename(&root_a, &moved_a).unwrap();
+        fs::rename(&root_b, &root_a).unwrap();
+
+        let result = runtime.knowledge_context_at(&pinned).await.unwrap();
+        assert_eq!(result["revision"], expected_revision);
+        assert_eq!(result["records"][0]["marker"], "A");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn knowledge_context_rejects_a_child_revision_not_bound_by_preflight() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().join("guru");
+        create_initialized_workspace(&workspace, "A");
+        let runtime = write_test_runtime(
+            temporary.path(),
+            "guruterminal-context-revision-mismatch",
+            "#!/bin/sh\nprintf '%s\\n' '{\"check\":{\"valid\":true},\"health\":{\"kinds\":[]},\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"records\":[],\"charter\":null}'\n",
+        );
+
+        let error = runtime.knowledge_context(&workspace).await.unwrap_err();
+        assert!(matches!(error, RuntimeError::MemoryBoundary));
     }
 
     #[cfg(unix)]

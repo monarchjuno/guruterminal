@@ -2344,10 +2344,12 @@ name = "guruterminal-core"
 version = "0.0.1-rc.1"
 dependencies = [
  "chrono",
+ "hex",
  "model2vec-rs",
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokenizers",
 ]
 
