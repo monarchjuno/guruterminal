@@ -34,7 +34,7 @@ import { useTheme } from "./theme";
 import type { AppTab, SettingsSection } from "./navigation";
 import { chatSessionKey } from "./chat/sessionRegistry";
 import { emptyWorkspaceSession } from "./chat/workspace";
-import { EMPTY_CHAT_THREAD_ID } from "./app/emptyChat";
+import { EMPTY_CHAT_THREAD_ID, isEmptyChatThreadId } from "./app/emptyChat";
 import { AppDialogs, useAppDialogs } from "./app/AppDialogs";
 import { useChatSessions } from "./app/useChatSessions";
 import { useGuruDirectory } from "./app/useGuruDirectory";
@@ -140,17 +140,23 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
     },
     [model.changeSelection, guru.recordLastModel, selectedGuruId],
   );
-  const threads = selectedGuruId
-    ? (chat.threadsByGuru[selectedGuruId] ?? [])
-    : [];
+  const threads = (
+    selectedGuruId ? (chat.threadsByGuru[selectedGuruId] ?? []) : []
+  ).filter((thread) => !isEmptyChatThreadId(thread.id));
   const activeThreadId = selectedGuruId
     ? (chat.activeThreadIds[selectedGuruId] ?? null)
     : null;
-  const activeThreadTitle =
-    threads.find((thread) => thread.id === activeThreadId)?.title ??
-    threads[0]?.title ??
-    "New chat";
-  const effectiveThreadId = activeThreadId ?? threads[0]?.id ?? null;
+  const activeThreadTitle = isEmptyChatThreadId(activeThreadId)
+    ? "New chat"
+    : (threads.find((thread) => thread.id === activeThreadId)?.title ??
+      threads[0]?.title ??
+      "New chat");
+  const effectiveThreadId = isEmptyChatThreadId(activeThreadId)
+    ? EMPTY_CHAT_THREAD_ID
+    : (activeThreadId ?? threads[0]?.id ?? null);
+  const persistedThreadId = isEmptyChatThreadId(effectiveThreadId)
+    ? null
+    : effectiveThreadId;
   const activeChat = selectedGuruId
     ? chat.chatRegistry.get(
         selectedGuruId,
@@ -167,8 +173,8 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
     ? (workspace.sessions[effectiveChatKey] ?? emptyWorkspaceSession())
     : emptyWorkspaceSession();
   const recoveredChat =
-    selectedGuruId && effectiveThreadId
-      ? chat.runRegistry.getRecoveredChat(selectedGuruId, effectiveThreadId)
+    selectedGuruId && persistedThreadId
+      ? chat.runRegistry.getRecoveredChat(selectedGuruId, persistedThreadId)
       : undefined;
   const setVisibleThreads = useCallback<Dispatch<SetStateAction<ChatThread[]>>>(
     (action) => {
@@ -183,10 +189,10 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
     [selectedGuruId, chat.setActiveThreadForGuru],
   );
   const abortVisibleRecoveredChat = useCallback(() => {
-    if (selectedGuruId && effectiveThreadId) {
-      chat.runRegistry.abortRecoveredChat(selectedGuruId, effectiveThreadId);
+    if (selectedGuruId && persistedThreadId) {
+      chat.runRegistry.abortRecoveredChat(selectedGuruId, persistedThreadId);
     }
-  }, [effectiveThreadId, chat.runRegistry, selectedGuruId]);
+  }, [persistedThreadId, chat.runRegistry, selectedGuruId]);
   const runningThreadKeys = useMemo(() => {
     const active = new Set(Object.keys(chat.chatStatuses));
     for (const recovered of chat.runRegistrySnapshot.active_chat_threads) {
@@ -290,7 +296,7 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
           }}
           onCreateThread={(guruId) => {
             setTab("chat");
-            void threadActions.createThreadForGuru(guruId);
+            void threadActions.openDraftChatForGuru(guruId);
           }}
           onRenameThread={dialogs.openRenameThread}
           onDeleteThread={dialogs.setThreadToDelete}
@@ -559,7 +565,7 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
                   bridge={bridge}
                   guruId={selectedGuru.id}
                   threadId={workspaceThreadId}
-                  canLoadArtifacts={Boolean(effectiveThreadId)}
+                  canLoadArtifacts={Boolean(persistedThreadId)}
                   open={workspace.open}
                   session={workspaceSession}
                   theme={resolvedTheme}

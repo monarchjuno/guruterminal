@@ -417,17 +417,12 @@ try {
 
     await clickButton("Chat");
     await (await displayed('button[aria-label="New session for Persistent E2E Agent"]')).click();
-    await browser.waitUntil(
-      async () => (await browser.$$('button[aria-label="Rename session"]')).length === 1,
-      { timeout: 10_000, interval: 100, timeoutMsg: "Persistent session was not created" },
+    await waitForText(await displayed("main"), "Connect a model provider");
+    assert.equal(
+      (await browser.$$('button[aria-label="Rename session"]')).length,
+      0,
+      "A Chat draft must not persist as a session before the first message",
     );
-    const [rename] = await browser.$$('button[aria-label="Rename session"]');
-    await rename.moveTo();
-    await rename.click();
-    const dialog = await displayed('[role="dialog"]');
-    await (await displayed("#rename-thread-name")).setValue("Persistent session");
-    await clickButton("Save", dialog);
-    await waitForText(await displayed('[aria-label="Application navigation"]'), "Persistent session");
     await clickButton("Agents");
     const agentsAfterSession = await displayed("#main-panel-agents");
     await clickButton("Import", agentsAfterSession);
@@ -444,17 +439,16 @@ try {
     const { main: onboarding, navigation } = await waitForApplicationShell();
     await waitForText(navigation, "Persistent E2E Agent");
     await selectNavigationAgent(navigation, "Persistent E2E Agent");
-    await waitForText(
-      navigation,
-      "Persistent session",
-      APP_SHELL_READY_TIMEOUT_MS,
-    );
     await clickButton("Agents");
     const agents = await displayed("#main-panel-agents");
     await waitForText(agents, "Persistent E2E Agent");
     await clickButton("Chat");
     assert.equal(await (await displayed("#main-tab-chat")).getAttribute("aria-current"), "page");
-    await waitForText(await displayed('[aria-label="Application navigation"]'), "Persistent session");
+    assert.equal(
+      (await browser.$$('button[aria-label="Rename session"]')).length,
+      0,
+      "An unsent Chat draft must not return after restart",
+    );
     await waitForText(onboarding, "Connect a model provider");
     assert.equal(
       (await browser.$$('textarea[aria-label="Message Guru"]')).length,

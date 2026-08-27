@@ -2,7 +2,11 @@ import { useCallback, useState } from "react";
 import type { ChatThread, GuruTerminalBridge } from "../types";
 import { errorMessage } from "../errors";
 import { chatSessionKey } from "../chat/sessionRegistry";
-import { EMPTY_CHAT_THREAD_ID, emptyChatThread } from "./emptyChat";
+import {
+  EMPTY_CHAT_THREAD_ID,
+  emptyChatThread,
+  isEmptyChatThreadId,
+} from "./emptyChat";
 import type { ChatSessions } from "./useChatSessions";
 import type { GuruDirectory } from "./useGuruDirectory";
 import type { WorkspacePanel } from "./useWorkspacePanel";
@@ -29,6 +33,26 @@ export function useThreadActions(
   const { desiredGuruIdRef, selectGuru, setError } = guru;
   const { adoptSession, removeSession } = workspace;
 
+  const openDraftChatForGuru = useCallback(
+    async (guruId: string) => {
+      if (desiredGuruIdRef.current !== guruId) {
+        const selected = await selectGuru(guruId);
+        if (!selected) return;
+      }
+      setError(null);
+      chatRegistry.ensure(emptyChatThread(guruId));
+      if (desiredGuruIdRef.current !== guruId) return;
+      setActiveThreadForGuru(guruId, EMPTY_CHAT_THREAD_ID);
+    },
+    [
+      chatRegistry,
+      desiredGuruIdRef,
+      selectGuru,
+      setActiveThreadForGuru,
+      setError,
+    ],
+  );
+
   const createThreadForGuru = useCallback(
     async (guruId: string) => {
       if (desiredGuruIdRef.current !== guruId) {
@@ -45,7 +69,10 @@ export function useThreadActions(
         chatRegistry.ensure(created);
         setThreadsForGuru(guruId, (current) => [
           created,
-          ...current.filter((thread) => thread.id !== created.id),
+          ...current.filter(
+            (thread) =>
+              thread.id !== created.id && !isEmptyChatThreadId(thread.id),
+          ),
         ]);
         if (desiredGuruIdRef.current !== guruId) return null;
         setActiveThreadForGuru(guruId, created.id);
@@ -110,12 +137,13 @@ export function useThreadActions(
         (item) => item.id !== thread.id,
       );
       chatRegistry.remove(thread.guru_id, thread.id);
-      if (remaining.length === 0) {
-        chatRegistry.ensure(emptyChatThread(thread.guru_id));
-      }
+      chatRegistry.ensure(emptyChatThread(thread.guru_id));
       setThreadsForGuru(thread.guru_id, remaining);
       if (activeThreadIdsRef.current[thread.guru_id] === thread.id) {
-        setActiveThreadForGuru(thread.guru_id, remaining[0]?.id ?? null);
+        setActiveThreadForGuru(
+          thread.guru_id,
+          remaining[0]?.id ?? EMPTY_CHAT_THREAD_ID,
+        );
       }
       await removeSession(thread.guru_id, thread.id);
       return true;
@@ -129,5 +157,11 @@ export function useThreadActions(
     }
   };
 
-  return { mutationBusy, createThreadForGuru, renameThread, deleteThread };
+  return {
+    mutationBusy,
+    openDraftChatForGuru,
+    createThreadForGuru,
+    renameThread,
+    deleteThread,
+  };
 }
