@@ -36,14 +36,8 @@ import {
   ChatPendingQueue,
   type QueuedChatMessage,
 } from "./chat/ChatPendingQueue";
-import {
-  emptyChatSetupSources,
-  isComposerMentionPlugin,
-  shouldShowEmptySetup,
-  type EmptySetupSource,
-} from "../app/chatOnboarding";
+import { isComposerMentionPlugin } from "../app/chatOnboarding";
 import { promptSelectsMemorySkill } from "../chat/memorySkillSelection";
-import { errorMessage } from "../errors";
 
 /** Workspace-launch callbacks already bound to the visible guru and thread. */
 export type ChatWorkspaceActions = {
@@ -69,7 +63,6 @@ type Props = {
   onModelSelectionChange: (selection: ModelRunSelection) => void;
   onModelUsed: (selection: ModelRunSelection) => void;
   onAbortRecoveredRun: () => void;
-  onOpenMarketplace: () => void;
 };
 
 export function ChatView({
@@ -88,7 +81,6 @@ export function ChatView({
   onModelSelectionChange,
   onModelUsed,
   onAbortRecoveredRun,
-  onOpenMarketplace,
 }: Props) {
   const [prompt, setPrompt] = useState("");
   const [useMemory, setUseMemory] = useState(true);
@@ -103,10 +95,6 @@ export function ChatView({
   const [composerPlugins, setComposerPlugins] = useState<
     ComposerPluginOption[]
   >([]);
-  const [setupSources, setSetupSources] = useState<EmptySetupSource[]>([]);
-  const [setupEpoch, setSetupEpoch] = useState(0);
-  const [setupBusy, setSetupBusy] = useState(false);
-  const [setupError, setSetupError] = useState<string | null>(null);
   const [queuedByThread, setQueuedByThread] = useState<
     Record<string, QueuedChatMessage[]>
   >({});
@@ -289,65 +277,16 @@ export function ChatView({
             ];
           }),
         );
-        const sources = emptyChatSetupSources(marketplace, bindings);
-        setSetupSources(shouldShowEmptySetup(sources) ? sources : []);
       })
       .catch(() => {
         if (cancelled) return;
         setComposerSkills([]);
         setComposerPlugins([]);
-        setSetupSources([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [bridge, guru.enabled_skill_ids, guru.id, setupEpoch]);
-
-  const configureSetupSource = useCallback(
-    async (entryId: string, config: Record<string, string>) => {
-      setSetupBusy(true);
-      setSetupError(null);
-      try {
-        await bridge.marketplaceConnectorConfigure({
-          entry_id: entryId,
-          config,
-        });
-        await bridge.guruCapabilityEnable({
-          guru_id: guru.id,
-          entry_id: entryId,
-        });
-        setSetupEpoch((current) => current + 1);
-      } catch (cause: unknown) {
-        setSetupError(
-          errorMessage(cause, "Could not save the contact email."),
-        );
-      } finally {
-        setSetupBusy(false);
-      }
-    },
-    [bridge, guru.id],
-  );
-
-  const enableSetupSource = useCallback(
-    async (entryId: string) => {
-      setSetupBusy(true);
-      setSetupError(null);
-      try {
-        await bridge.guruCapabilityEnable({
-          guru_id: guru.id,
-          entry_id: entryId,
-        });
-        setSetupEpoch((current) => current + 1);
-      } catch (cause: unknown) {
-        setSetupError(
-          errorMessage(cause, "Could not enable this source for the Guru."),
-        );
-      } finally {
-        setSetupBusy(false);
-      }
-    },
-    [bridge, guru.id],
-  );
+  }, [bridge, guru.enabled_skill_ids, guru.id]);
 
   useEffect(() => {
     if (
@@ -606,13 +545,7 @@ export function ChatView({
           messages={visibleConversation.messages}
           messageKeys={visibleConversation.messageKeys}
           guruName={guru.name}
-          setupSources={setupSources}
-          setupBusy={setupBusy}
-          setupError={setupError}
           onSuggestion={changePrompt}
-          onOpenMarketplace={onOpenMarketplace}
-          onConfigureSource={configureSetupSource}
-          onEnableSource={enableSetupSource}
           onOpenMemory={workspaceActions.openMemory}
           onOpenInLibrary={workspaceActions.openInLibrary}
           onOpenArtifact={openChatArtifact}
