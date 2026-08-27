@@ -156,6 +156,25 @@ pub struct KnowledgeHealth {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct KnowledgeCharterRead {
+    pub document: Document,
+    pub section: Option<Section>,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct KnowledgeContext {
+    pub check: KnowledgeCheck,
+    pub health: KnowledgeHealth,
+    pub revision: String,
+    /// Full `knowledge list`-compatible records. The desktop applies its
+    /// recent-Git ordering, historical cutoff, and prompt-size cap.
+    pub records: Vec<Document>,
+    /// Exact `knowledge read lens:charter`-compatible shape, when present.
+    pub charter: Option<KnowledgeCharterRead>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ReadResult {
     pub document: Document,
     pub section: Option<Section>,

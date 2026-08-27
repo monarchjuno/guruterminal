@@ -1,4 +1,11 @@
 use super::*;
+use sha2::{Digest, Sha256};
+
+pub(super) struct CatalogCapture {
+    pub revision: String,
+    pub documents: Vec<Document>,
+    pub layout_issues: Vec<KnowledgeIssue>,
+}
 
 fn infer_kind(path: &Path, root: &Path) -> String {
     let base = root.join("guruterminal");
@@ -25,6 +32,94 @@ pub(super) fn catalog_local_unchecked(root: &Path) -> Vec<Document> {
         .collect();
     docs.sort_by(|a, b| (&a.kind, &a.id).cmp(&(&b.kind, &b.id)));
     docs
+}
+
+/// Reads each Markdown record once and derives the desktop-compatible tree
+/// revision from those exact bytes. The surrounding Runtime boundary scan is
+/// still authoritative for file count, byte limits, and unsupported entries.
+pub(super) fn capture_local_catalog(root: &Path) -> Result<CatalogCapture, String> {
+    let memory_root = root.join("guruterminal");
+    let mut tree = Sha256::new();
+    let mut documents = Vec::new();
+    let mut layout_issues = Vec::new();
+    let mut paths = Vec::new();
+    for kind in CanonicalMemoryKind::ALL {
+        let kind = kind.slug();
+        let directory = memory_root.join(kind);
+        if let Ok(metadata) = fs::symlink_metadata(&directory) {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                layout_issues.push(KnowledgeIssue {
+                    path: display_path(&directory, root),
+                    field: "layout".into(),
+                    message: format!("{kind} collection must be a non-symlink directory"),
+                });
+                continue;
+            }
+        }
+        collect_context_paths(root, kind, &directory, &mut paths, &mut layout_issues);
+    }
+    paths.sort();
+    for path in paths {
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("cannot capture {}: {error}", display_path(&path, root)))?;
+        let relative = path
+            .strip_prefix(&memory_root)
+            .map_err(|_| "knowledge record is outside the Memory tree".to_string())?;
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| "knowledge record path is not UTF-8".to_string())?
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        tree.update((relative.len() as u64).to_be_bytes());
+        tree.update(relative.as_bytes());
+        tree.update((bytes.len() as u64).to_be_bytes());
+        tree.update(&bytes);
+        documents.push(match String::from_utf8(bytes) {
+            Ok(content) => document_from_content(root, &path, content),
+            Err(error) => unreadable_document(root, &path, error.to_string()),
+        });
+    }
+    documents.sort_by(|a, b| (&a.kind, &a.id).cmp(&(&b.kind, &b.id)));
+    Ok(CatalogCapture {
+        revision: hex::encode(tree.finalize()),
+        documents,
+        layout_issues,
+    })
+}
+
+fn collect_context_paths(
+    root: &Path,
+    kind: &str,
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+    issues: &mut Vec<KnowledgeIssue>,
+) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let relative = display_path(&path, root);
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            issues.push(KnowledgeIssue {
+                path: relative,
+                field: "layout".into(),
+                message: format!("{kind} elements and directories must not be symlinks"),
+            });
+        } else if metadata.is_dir() {
+            collect_context_paths(root, kind, &path, paths, issues);
+        } else if metadata.is_file() && is_markdown(&path) {
+            paths.push(path);
+        } else {
+            issues.push(KnowledgeIssue {
+                path: relative,
+                field: "layout".into(),
+                message: format!("{kind} elements must be non-symlink Markdown files"),
+            });
+        }
+    }
 }
 pub fn read(root: &Path, id: &str, section: Option<&str>) -> Result<ReadResult, String> {
     read_internal(root, id, section, None)
@@ -164,6 +259,10 @@ pub(super) fn load_local(root: &Path, path: &Path) -> Document {
 }
 pub(super) fn load_document(root: &Path, path: &Path) -> Result<Document, std::io::Error> {
     let content = fs::read_to_string(path)?;
+    Ok(document_from_content(root, path, content))
+}
+
+fn document_from_content(root: &Path, path: &Path, content: String) -> Document {
     let parsed = parse_frontmatter(&content);
     let relationships = RELATIONSHIP_TYPES
         .iter()
@@ -181,7 +280,7 @@ pub(super) fn load_document(root: &Path, path: &Path) -> Result<Document, std::i
         })
         .collect();
     let m = parsed.metadata;
-    Ok(Document {
+    Document {
         id: m.scalar.get("id").cloned().unwrap_or_default(),
         kind: infer_kind(path, root),
         title: m.scalar.get("title").cloned().unwrap_or_default(),
@@ -202,7 +301,7 @@ pub(super) fn load_document(root: &Path, path: &Path) -> Result<Document, std::i
         read_error: parsed.error,
         declared_fields: m.declared_fields,
         duplicate_fields: m.duplicate_fields,
-    })
+    }
 }
 pub(super) fn unreadable_document(root: &Path, path: &Path, message: String) -> Document {
     Document {
@@ -279,20 +378,22 @@ pub(super) fn validate_document(doc: &Document) -> Vec<KnowledgeIssue> {
                 "evidence source must be a non-empty locator when declared",
             ));
         }
-        if doc.source.is_none() {
-            let sections = split_sections(&doc.body);
-            for required in ["Claims", "Sources"] {
-                if !sections.iter().any(|section| {
-                    section.heading.eq_ignore_ascii_case(required)
-                        && !section.text.trim().is_empty()
-                }) {
-                    out.push(issue(
-                        doc,
-                        "body",
-                        &format!("source-less Evidence requires a non-empty # {required} section"),
-                    ));
-                }
-            }
+        if doc.body.trim().is_empty() {
+            out.push(issue(doc, "body", "Evidence requires a non-empty body"));
+        }
+        let has_source = doc
+            .source
+            .as_deref()
+            .is_some_and(|source| !source.trim().is_empty());
+        let has_sources_section = split_sections(&doc.body).iter().any(|section| {
+            section.heading.eq_ignore_ascii_case("Sources") && !section.text.trim().is_empty()
+        });
+        if !has_source && !has_sources_section {
+            out.push(issue(
+                doc,
+                "body",
+                "Evidence requires a non-empty source or # Sources section",
+            ));
         }
     }
     if doc.declared_fields.contains("see_also") && doc.kind != "wiki" {
