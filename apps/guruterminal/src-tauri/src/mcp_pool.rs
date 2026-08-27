@@ -162,6 +162,22 @@ impl McpProcessPool {
         }
     }
 
+    /// Quarantine turn-owned servers while they reset, then make only the
+    /// successfully reset processes visible to future acquires. The owned
+    /// server values stay outside `idle` for the entire reset, so a new turn
+    /// cannot lease partially reset authority or tool state.
+    pub(crate) fn release_in_background(&self, servers: Vec<TurnMcpServer>) {
+        if servers.is_empty() {
+            return;
+        }
+        let pool = self.clone();
+        let _reset = tokio::spawn(async move {
+            for server in servers {
+                pool.release(server).await;
+            }
+        });
+    }
+
     #[cfg(test)]
     pub(crate) async fn idle_count(&self) -> usize {
         self.inner.lock().await.idle.len()

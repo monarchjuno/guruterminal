@@ -1,10 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::Arc,
     time::Duration,
 };
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use super::*;
 use crate::{
@@ -20,6 +22,78 @@ use crate::{
 
 const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(45);
 const MCP_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+type SharedMcpServer = Arc<Mutex<Option<TurnMcpServer>>>;
+
+#[derive(Default)]
+pub(super) struct McpTurnSessions {
+    by_server: BTreeMap<String, SharedMcpServer>,
+    closed: bool,
+}
+
+impl McpTurnSessions {
+    fn get(&self, server_id: &str) -> Option<SharedMcpServer> {
+        self.by_server.get(server_id).cloned()
+    }
+
+    #[cfg(test)]
+    fn insert(&mut self, server_id: String, server: TurnMcpServer) {
+        assert!(
+            !self.closed,
+            "cannot insert an MCP server after turn shutdown"
+        );
+        self.by_server
+            .insert(server_id, Arc::new(Mutex::new(Some(server))));
+    }
+
+    fn insert_shared_if_absent(
+        &mut self,
+        server_id: &str,
+        server: SharedMcpServer,
+    ) -> Result<Option<SharedMcpServer>, ()> {
+        if self.closed {
+            return Err(());
+        }
+        if let Some(existing) = self.by_server.get(server_id) {
+            return Ok(Some(existing.clone()));
+        }
+        self.by_server.insert(server_id.to_owned(), server);
+        Ok(None)
+    }
+
+    fn remove_if_current(&mut self, server_id: &str, expected: &SharedMcpServer) {
+        if self
+            .by_server
+            .get(server_id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
+            self.by_server.remove(server_id);
+        }
+    }
+
+    fn close_and_take_all(&mut self) -> Vec<SharedMcpServer> {
+        self.closed = true;
+        std::mem::take(&mut self.by_server).into_values().collect()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.by_server.len()
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.by_server.is_empty()
+    }
+}
+
+enum McpServerInstall {
+    Installed,
+    Occupied {
+        tools: Vec<Value>,
+        candidate: Box<TurnMcpServer>,
+    },
+}
 
 struct McpRunAuthority {
     runtime: BundledMcpRuntime,
@@ -47,19 +121,100 @@ impl ToolCapture {
     pub(crate) async fn shutdown_mcp(&self) {
         let sessions = {
             let mut sessions = self.mcp_sessions.lock().await;
-            std::mem::take(&mut *sessions)
+            sessions.close_and_take_all()
         };
+        let mut servers = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            if let Some(server) = session.lock().await.take() {
+                servers.push(server);
+            }
+        }
         match &self.mcp_pool {
             Some(pool) => {
-                for (_, server) in sessions {
-                    pool.release(server).await;
-                }
+                pool.release_in_background(servers);
             }
             None => {
-                for (_, server) in sessions {
-                    let _ = server.session.shutdown(MCP_SHUTDOWN_GRACE).await;
+                for server in servers {
+                    server.discard().await;
                 }
             }
+        }
+    }
+
+    async fn mcp_session(&self, server_id: &str) -> Option<SharedMcpServer> {
+        self.mcp_sessions.lock().await.get(server_id)
+    }
+
+    async fn remove_mcp_session(&self, server_id: &str, expected: &SharedMcpServer) {
+        self.mcp_sessions
+            .lock()
+            .await
+            .remove_if_current(server_id, expected);
+    }
+
+    async fn discard_mcp_session(
+        &self,
+        server_id: &str,
+        expected: &SharedMcpServer,
+        server: Option<TurnMcpServer>,
+    ) {
+        self.remove_mcp_session(server_id, expected).await;
+        if let Some(server) = server {
+            server.discard().await;
+        }
+    }
+
+    async fn install_mcp_session(
+        &self,
+        server_id: &str,
+        server: TurnMcpServer,
+    ) -> Result<McpServerInstall, BrokerError> {
+        let candidate = Arc::new(Mutex::new(Some(server)));
+        loop {
+            let existing = self
+                .mcp_sessions
+                .lock()
+                .await
+                .insert_shared_if_absent(server_id, candidate.clone());
+            let existing = match existing {
+                Ok(existing) => existing,
+                Err(()) => {
+                    let candidate = candidate
+                        .lock()
+                        .await
+                        .take()
+                        .expect("unpublished MCP candidate disappeared");
+                    candidate.discard().await;
+                    return Err(BrokerError::Execution("MCP turn stopped".into()));
+                }
+            };
+            let Some(existing) = existing else {
+                return Ok(McpServerInstall::Installed);
+            };
+            let tools = {
+                let existing = existing.lock().await;
+                existing
+                    .as_ref()
+                    .map(|server| agent_tool_cards(server_id, server.tools.values()))
+            };
+            if let Some(tools) = tools {
+                let candidate = candidate
+                    .lock()
+                    .await
+                    .take()
+                    .expect("unpublished MCP candidate disappeared");
+                return match tools {
+                    Ok(tools) => Ok(McpServerInstall::Occupied {
+                        tools,
+                        candidate: Box::new(candidate),
+                    }),
+                    Err(error) => {
+                        candidate.discard().await;
+                        Err(error)
+                    }
+                };
+            }
+            self.remove_mcp_session(server_id, &existing).await;
         }
     }
 }
@@ -68,55 +223,55 @@ impl AppToolExecutor {
     pub(super) async fn mcp_connect(&self, params: Value) -> Result<Value, BrokerError> {
         let request: McpConnectRequest =
             serde_json::from_value(params).map_err(|_| BrokerError::Malformed)?;
-        {
-            let mut sessions = self.capture.mcp_sessions.lock().await;
-            if sessions.contains_key(&request.server_id) {
-                let cached = {
-                    let server = sessions
-                        .get_mut(&request.server_id)
-                        .expect("cached MCP session disappeared");
-                    match server.session.is_running().await {
-                        Ok(false) => Ok(None),
-                        Err(error) => Err(map_mcp_error(error)),
-                        Ok(true) => {
-                            refresh_inventory(&request.server_id, server, false).await?;
-                            Ok(Some(agent_tool_cards(
-                                &request.server_id,
-                                server.tools.values(),
-                            )?))
-                        }
-                    }
-                };
-                match cached {
-                    Ok(Some(tools)) => {
-                        return Ok(json!({
-                            "server_id": request.server_id,
-                            "tools": tools,
-                        }))
-                    }
-                    Ok(None) => {
-                        sessions.remove(&request.server_id);
-                    }
-                    Err(error) => {
-                        sessions.remove(&request.server_id);
-                        return Err(error);
-                    }
-                }
-            }
+        if let Some(tools) = self.connected_mcp_tools(&request.server_id).await? {
+            return Ok(json!({
+                "server_id": request.server_id,
+                "tools": tools,
+            }));
         }
         let authority = self.mcp_run_authority(&request.server_id).await?;
-        {
-            let sessions = self.capture.mcp_sessions.lock().await;
-            if let Some(server) = sessions.get(&request.server_id) {
-                return Ok(json!({
-                    "server_id": request.server_id,
-                    "tools": agent_tool_cards(&request.server_id, server.tools.values())?,
-                }));
-            }
+        if let Some(tools) = self.connected_mcp_tools(&request.server_id).await? {
+            return Ok(json!({
+                "server_id": request.server_id,
+                "tools": tools,
+            }));
         }
 
         self.attach_or_spawn_mcp(&request.server_id, authority)
             .await
+    }
+
+    async fn connected_mcp_tools(
+        &self,
+        server_id: &str,
+    ) -> Result<Option<Vec<Value>>, BrokerError> {
+        let Some(session) = self.capture.mcp_session(server_id).await else {
+            return Ok(None);
+        };
+        let mut guard = session.lock().await;
+        let Some(server) = guard.as_mut() else {
+            drop(guard);
+            self.capture.remove_mcp_session(server_id, &session).await;
+            return Ok(None);
+        };
+        let cached = match server.session.is_running().await {
+            Ok(false) => Ok(None),
+            Err(error) => Err(map_mcp_error(error)),
+            Ok(true) => match refresh_inventory(server_id, server, false).await {
+                Ok(_) => agent_tool_cards(server_id, server.tools.values()).map(Some),
+                Err(error) => Err(error),
+            },
+        };
+        if matches!(&cached, Ok(Some(_))) {
+            return cached;
+        }
+        let stale = guard.take();
+        drop(guard);
+        self.capture.remove_mcp_session(server_id, &session).await;
+        if let Some(stale) = stale {
+            stale.discard().await;
+        }
+        cached
     }
 
     async fn attach_or_spawn_mcp(
@@ -132,20 +287,18 @@ impl AppToolExecutor {
         if let (Some(pool), Some(key)) = (&self.capture.mcp_pool, pool_key.as_ref()) {
             if let Some(mut server) = pool.acquire(key).await {
                 match prepare_acquired_session(server_id, &mut server).await {
-                    Ok(tools) => {
-                        let mut sessions = self.capture.mcp_sessions.lock().await;
-                        if let Some(existing) = sessions.get(server_id) {
-                            let cards = agent_tool_cards(server_id, existing.tools.values())?;
-                            drop(sessions);
-                            pool.release(server).await;
+                    Ok(tools) => match self.capture.install_mcp_session(server_id, server).await? {
+                        McpServerInstall::Installed => {
+                            return Ok(json!({ "server_id": server_id, "tools": tools }));
+                        }
+                        McpServerInstall::Occupied { tools, candidate } => {
+                            pool.release(*candidate).await;
                             return Ok(json!({
                                 "server_id": server_id,
-                                "tools": cards,
+                                "tools": tools,
                             }));
                         }
-                        sessions.insert(server_id.to_owned(), server);
-                        return Ok(json!({ "server_id": server_id, "tools": tools }));
-                    }
+                    },
                     Err(_) => {
                         server.discard().await;
                     }
@@ -225,32 +378,27 @@ impl AppToolExecutor {
             &providerless_tool_policy,
         )?;
         let cards = agent_tool_cards(server_id, tools.values())?;
-        let mut sessions = self.capture.mcp_sessions.lock().await;
-        if let Some(server) = sessions.get(server_id) {
-            let existing = agent_tool_cards(server_id, server.tools.values())?;
-            drop(sessions);
-            let _ = session.shutdown(MCP_SHUTDOWN_GRACE).await;
-            let _ = tokio::fs::remove_dir_all(&scratch).await;
-            return Ok(json!({
-                "server_id": server_id,
-                "tools": existing,
-            }));
+        let server = TurnMcpServer {
+            session,
+            control_tool_names,
+            tools,
+            enabled_provider_ids,
+            providerless_tool_policy,
+            provider_receipt_pointer,
+            sensitive_values,
+            pool_key,
+            scratch_dir: Some(scratch),
+        };
+        match self.capture.install_mcp_session(server_id, server).await? {
+            McpServerInstall::Installed => Ok(json!({ "server_id": server_id, "tools": cards })),
+            McpServerInstall::Occupied { tools, candidate } => {
+                (*candidate).discard().await;
+                Ok(json!({
+                    "server_id": server_id,
+                    "tools": tools,
+                }))
+            }
         }
-        sessions.insert(
-            server_id.to_owned(),
-            TurnMcpServer {
-                session,
-                control_tool_names,
-                tools,
-                enabled_provider_ids,
-                providerless_tool_policy,
-                provider_receipt_pointer,
-                sensitive_values,
-                pool_key,
-                scratch_dir: Some(scratch),
-            },
-        );
-        Ok(json!({ "server_id": server_id, "tools": cards }))
     }
 
     pub(super) async fn mcp_call(
@@ -260,29 +408,34 @@ impl AppToolExecutor {
     ) -> Result<Value, BrokerError> {
         let request: McpToolCallRequest =
             serde_json::from_value(params).map_err(|_| BrokerError::Malformed)?;
-        let mut sessions = self.capture.mcp_sessions.lock().await;
-        if !sessions.contains_key(&request.server_id) {
+        let Some(session) = self.capture.mcp_session(&request.server_id).await else {
             return Ok(stopped_mcp_response());
-        }
-        let preflight = {
-            let server = sessions
-                .get_mut(&request.server_id)
-                .expect("loaded MCP session disappeared");
-            if !server.session.is_running().await.map_err(map_mcp_error)? {
-                Err(BrokerError::Execution("bundled MCP runtime failed".into()))
-            } else {
-                refresh_inventory(&request.server_id, server, false).await
-            }
+        };
+        let mut session_guard = session.lock().await;
+        let Some(server) = session_guard.as_mut() else {
+            drop(session_guard);
+            self.capture
+                .remove_mcp_session(&request.server_id, &session)
+                .await;
+            return Ok(stopped_mcp_response());
+        };
+        let preflight = match server.session.is_running().await {
+            Ok(true) => refresh_inventory(&request.server_id, server, false).await,
+            Ok(false) | Err(_) => Err(BrokerError::Execution("bundled MCP runtime failed".into())),
         };
         let preflight_tools = match preflight {
             Ok(tools) => tools,
             Err(_) => {
-                sessions.remove(&request.server_id);
+                let stopped = session_guard.take();
+                drop(session_guard);
+                self.capture
+                    .discard_mcp_session(&request.server_id, &session, stopped)
+                    .await;
                 return Ok(stopped_mcp_response());
             }
         };
-        let server = sessions
-            .get_mut(&request.server_id)
+        let server = session_guard
+            .as_mut()
             .expect("loaded MCP session disappeared after refresh");
         let Some(tool) = server.tools.get(&request.tool_name).cloned() else {
             return mcp_call_error_with_inventory(preflight_tools, BrokerError::MethodDenied);
@@ -325,7 +478,11 @@ impl AppToolExecutor {
                 );
                 let mapped = map_mcp_error(error);
                 if terminal {
-                    sessions.remove(&request.server_id);
+                    let stopped = session_guard.take();
+                    drop(session_guard);
+                    self.capture
+                        .discard_mcp_session(&request.server_id, &session, stopped)
+                        .await;
                     return Ok(stopped_mcp_response());
                 }
                 return mcp_call_error_with_inventory(preflight_tools, mapped);
@@ -345,14 +502,22 @@ impl AppToolExecutor {
         )
         .is_err()
         {
-            sessions.remove(&request.server_id);
+            let stopped = session_guard.take();
+            drop(session_guard);
+            self.capture
+                .discard_mcp_session(&request.server_id, &session, stopped)
+                .await;
             return Ok(stopped_mcp_response());
         }
 
         let mut payload = serde_json::to_value(&result)
             .map_err(|_| BrokerError::Execution("MCP result was invalid".into()))?;
         if contains_protected_value(&payload, &server.sensitive_values) {
-            sessions.remove(&request.server_id);
+            let stopped = session_guard.take();
+            drop(session_guard);
+            self.capture
+                .discard_mcp_session(&request.server_id, &session, stopped)
+                .await;
             return Ok(stopped_mcp_response());
         }
         let list_changed = server.session.take_tools_changed();
@@ -360,7 +525,11 @@ impl AppToolExecutor {
         let postflight_tools = match refresh_inventory(&request.server_id, server, refresh).await {
             Ok(tools) => tools,
             Err(_) => {
-                sessions.remove(&request.server_id);
+                let stopped = session_guard.take();
+                drop(session_guard);
+                self.capture
+                    .discard_mcp_session(&request.server_id, &session, stopped)
+                    .await;
                 return Ok(stopped_mcp_response());
             }
         };
@@ -779,7 +948,7 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    use std::{fs, path::PathBuf, sync::Arc};
+    use std::{fs, path::PathBuf, sync::Arc, time::Instant};
 
     #[cfg(unix)]
     const ISOLATION_MCP_SCRIPT: &str = r#"
@@ -824,6 +993,9 @@ while IFS= read -r line; do
       ;;
     *'"method":"tools/call"'*'"name":"deactivate_tools"'*)
       id=${line#*\"id\":\"}; id=${id%%\"*}
+      if [ -n "${MCP_TEST_RESET_DELAY_SECONDS:-}" ]; then
+        sleep "$MCP_TEST_RESET_DELAY_SECONDS"
+      fi
       activated=0
       printf '{"jsonrpc":"2.0","id":"%s","result":{"content":[{"type":"text","text":"deactivated"}],"structuredContent":{"deactivated":true},"isError":false}}\n' "$id"
       ;;
@@ -833,6 +1005,9 @@ while IFS= read -r line; do
         *'"provider":"fmp"'*) provider=fmp ;;
         *) provider=yfinance ;;
       esac
+      if [ -n "${MCP_TEST_CALL_DELAY_SECONDS:-}" ]; then
+        sleep "$MCP_TEST_CALL_DELAY_SECONDS"
+      fi
       printf '{"jsonrpc":"2.0","id":"%s","result":{"content":[{"type":"text","text":"quote"}],"structuredContent":{"provider":"%s","price":123},"isError":false}}\n' "$id" "$provider"
       ;;
   esac
@@ -854,6 +1029,14 @@ done
     #[cfg(unix)]
     fn poolable_control_tools() -> BTreeSet<String> {
         BTreeSet::from(["activate_tools".into(), "deactivate_tools".into()])
+    }
+
+    #[cfg(unix)]
+    struct IsolatedServerOptions {
+        async_list_changed: bool,
+        control_tool_names: BTreeSet<String>,
+        call_delay: Option<Duration>,
+        reset_delay: Option<Duration>,
     }
 
     #[cfg(unix)]
@@ -884,6 +1067,29 @@ done
         async_list_changed: bool,
         control_tool_names: BTreeSet<String>,
     ) -> (TurnMcpServer, PathBuf, PathBuf) {
+        spawn_isolated_turn_server_with_control_and_delay(
+            temporary,
+            name,
+            enabled_provider_ids,
+            credential,
+            IsolatedServerOptions {
+                async_list_changed,
+                control_tool_names,
+                call_delay: None,
+                reset_delay: None,
+            },
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    async fn spawn_isolated_turn_server_with_control_and_delay(
+        temporary: &tempfile::TempDir,
+        name: &str,
+        enabled_provider_ids: BTreeSet<String>,
+        credential: (&str, &str),
+        options: IsolatedServerOptions,
+    ) -> (TurnMcpServer, PathBuf, PathBuf) {
         let transcript = temporary.path().join(format!("{name}-transcript.jsonl"));
         let exited = temporary.path().join(format!("{name}-exited"));
         let pid = temporary.path().join(format!("{name}-pid"));
@@ -899,8 +1105,20 @@ done
             ),
             ("MCP_TEST_PID".into(), pid.to_string_lossy().into_owned()),
         ]);
-        if async_list_changed {
+        if options.async_list_changed {
             environment.insert("MCP_TEST_ASYNC_LIST_CHANGED".into(), "1".into());
+        }
+        if let Some(call_delay) = options.call_delay {
+            environment.insert(
+                "MCP_TEST_CALL_DELAY_SECONDS".into(),
+                format!("{:.3}", call_delay.as_secs_f64()),
+            );
+        }
+        if let Some(reset_delay) = options.reset_delay {
+            environment.insert(
+                "MCP_TEST_RESET_DELAY_SECONDS".into(),
+                format!("{:.3}", reset_delay.as_secs_f64()),
+            );
         }
         let (session, initial_tools) = McpSession::spawn(McpLaunchConfig {
             server_id: "openbb".into(),
@@ -926,7 +1144,7 @@ done
         .unwrap();
         let tools = filter_inventory(
             &initial_tools,
-            &control_tool_names,
+            &options.control_tool_names,
             &enabled_provider_ids,
             &ProviderlessToolPolicy::default(),
         )
@@ -934,7 +1152,7 @@ done
         (
             TurnMcpServer {
                 session,
-                control_tool_names,
+                control_tool_names: options.control_tool_names,
                 tools,
                 enabled_provider_ids,
                 providerless_tool_policy: ProviderlessToolPolicy::default(),
@@ -1020,8 +1238,19 @@ done
 
     #[cfg(unix)]
     async fn wait_for_exit_marker(path: &std::path::Path) {
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(4), async {
             while !path.is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_pool_idle(pool: &crate::mcp_pool::McpProcessPool, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while pool.idle_count().await != expected {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -1236,6 +1465,30 @@ done
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn session_finishing_during_spawn_rejects_and_discards_the_late_server() {
+        let _guard = crate::mcp::MCP_PROCESS_TEST_LOCK.lock().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let capture = isolated_capture(&temporary, "late-server");
+        let (server, _transcript, exited) = spawn_isolated_turn_server(
+            &temporary,
+            "late-server",
+            BTreeSet::from(["yfinance".into()]),
+            ("yfinance_api_key", "late-server-secret"),
+            false,
+        )
+        .await;
+
+        capture.shutdown_mcp().await;
+        assert!(matches!(
+            capture.install_mcp_session("openbb", server).await,
+            Err(BrokerError::Execution(message)) if message == "MCP turn stopped"
+        ));
+        assert!(capture.mcp_sessions.lock().await.is_empty());
+        wait_for_exit_marker(&exited).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn asynchronous_list_changed_inventory_is_returned_with_the_next_call() {
         let _guard = crate::mcp::MCP_PROCESS_TEST_LOCK.lock().await;
         let temporary = tempfile::tempdir().unwrap();
@@ -1284,6 +1537,135 @@ done
         capture.discard_delivery("delivery-async-inventory").await;
         capture.shutdown_mcp().await;
         wait_for_exit_marker(&exited).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn different_mcp_servers_run_in_parallel_while_one_server_remains_serialized() {
+        let _guard = crate::mcp::MCP_PROCESS_TEST_LOCK.lock().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temporary.path().join("app"));
+        let capture = isolated_capture(&temporary, "server-locks");
+        let delay = Duration::from_millis(250);
+        let (server_a, _transcript_a, exited_a) =
+            spawn_isolated_turn_server_with_control_and_delay(
+                &temporary,
+                "server-lock-a",
+                BTreeSet::from(["yfinance".into()]),
+                ("yfinance_api_key", "server-a-secret"),
+                IsolatedServerOptions {
+                    async_list_changed: false,
+                    control_tool_names: BTreeSet::from(["activate_tools".into()]),
+                    call_delay: Some(delay),
+                    reset_delay: None,
+                },
+            )
+            .await;
+        let (server_b, _transcript_b, exited_b) =
+            spawn_isolated_turn_server_with_control_and_delay(
+                &temporary,
+                "server-lock-b",
+                BTreeSet::from(["yfinance".into()]),
+                ("yfinance_api_key", "server-b-secret"),
+                IsolatedServerOptions {
+                    async_list_changed: false,
+                    control_tool_names: BTreeSet::from(["activate_tools".into()]),
+                    call_delay: Some(delay),
+                    reset_delay: None,
+                },
+            )
+            .await;
+        {
+            let mut sessions = capture.mcp_sessions.lock().await;
+            sessions.insert("server-a".into(), server_a);
+            sessions.insert("server-b".into(), server_b);
+        }
+        let executor = isolated_executor(&temporary, &state, "guru-a", capture.clone());
+
+        let activate_a = executor.mcp_call(
+            json!({
+                "server_id": "server-a",
+                "tool_name": "activate_tools",
+                "arguments": {"tool_names": ["equity_quote"]}
+            }),
+            "delivery-server-a-activate",
+        );
+        let activate_b = executor.mcp_call(
+            json!({
+                "server_id": "server-b",
+                "tool_name": "activate_tools",
+                "arguments": {"tool_names": ["equity_quote"]}
+            }),
+            "delivery-server-b-activate",
+        );
+        let (activate_a, activate_b) = tokio::join!(activate_a, activate_b);
+        activate_a.unwrap();
+        activate_b.unwrap();
+
+        let different_started = Instant::now();
+        let call_a = executor.mcp_call(
+            json!({
+                "server_id": "server-a",
+                "tool_name": "equity_quote",
+                "arguments": {"symbol": "A", "provider": "yfinance"}
+            }),
+            "delivery-server-a-first",
+        );
+        let call_b = executor.mcp_call(
+            json!({
+                "server_id": "server-b",
+                "tool_name": "equity_quote",
+                "arguments": {"symbol": "B", "provider": "yfinance"}
+            }),
+            "delivery-server-b-first",
+        );
+        let (call_a, call_b) = tokio::join!(call_a, call_b);
+        call_a.unwrap();
+        call_b.unwrap();
+        let different_elapsed = different_started.elapsed();
+
+        let same_started = Instant::now();
+        let same_first = executor.mcp_call(
+            json!({
+                "server_id": "server-a",
+                "tool_name": "equity_quote",
+                "arguments": {"symbol": "A1", "provider": "yfinance"}
+            }),
+            "delivery-server-a-second",
+        );
+        let same_second = executor.mcp_call(
+            json!({
+                "server_id": "server-a",
+                "tool_name": "equity_quote",
+                "arguments": {"symbol": "A2", "provider": "yfinance"}
+            }),
+            "delivery-server-a-third",
+        );
+        let (same_first, same_second) = tokio::join!(same_first, same_second);
+        same_first.unwrap();
+        same_second.unwrap();
+        let same_elapsed = same_started.elapsed();
+
+        assert!(
+            different_elapsed < Duration::from_millis(450),
+            "different servers were serialized: {different_elapsed:?}"
+        );
+        assert!(
+            same_elapsed >= Duration::from_millis(450),
+            "same-server calls escaped serialization: {same_elapsed:?}"
+        );
+
+        for delivery_id in [
+            "delivery-server-a-first",
+            "delivery-server-b-first",
+            "delivery-server-a-second",
+            "delivery-server-a-third",
+        ] {
+            capture.discard_delivery(delivery_id).await;
+        }
+        capture.shutdown_mcp().await;
+        wait_for_exit_marker(&exited_a).await;
+        wait_for_exit_marker(&exited_b).await;
     }
 
     #[cfg(unix)]
@@ -1481,7 +1863,7 @@ done
         capture.shutdown_mcp().await;
         assert!(capture.mcp_sessions.lock().await.is_empty());
         assert!(!exited.is_file());
-        assert_eq!(pool.idle_count().await, 1);
+        wait_for_pool_idle(&pool, 1).await;
 
         let next = pooled_capture(&temporary, "reuse-two", pool.clone());
         let next_executor = isolated_executor(&temporary, &state, "guru-a", next.clone());
@@ -1521,7 +1903,78 @@ done
 
         next.shutdown_mcp().await;
         assert!(!exited.is_file());
+        wait_for_pool_idle(&pool, 1).await;
         pool.shutdown().await;
+        wait_for_exit_marker(&exited).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pooled_reset_is_backgrounded_and_quarantined_until_it_finishes() {
+        let _guard = crate::mcp::MCP_PROCESS_TEST_LOCK.lock().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let state = AppState::for_test(temporary.path().join("app"));
+        let pool = state.mcp_pool.clone();
+        let authority = test_authority(
+            &temporary,
+            "background-reset",
+            BTreeSet::from(["yfinance".into()]),
+            BTreeMap::new(),
+        );
+        let key = pool_key("guru-a", "openbb", &authority);
+        let capture = pooled_capture(&temporary, "background-reset", pool.clone());
+        let (mut server, _transcript, exited) = spawn_isolated_turn_server_with_control_and_delay(
+            &temporary,
+            "background-reset",
+            BTreeSet::from(["yfinance".into()]),
+            ("yfinance_api_key", "background-reset-secret"),
+            IsolatedServerOptions {
+                async_list_changed: false,
+                control_tool_names: poolable_control_tools(),
+                call_delay: None,
+                reset_delay: Some(Duration::from_millis(250)),
+            },
+        )
+        .await;
+        server.pool_key = Some(key.clone());
+        capture
+            .mcp_sessions
+            .lock()
+            .await
+            .insert("openbb".into(), server);
+        let executor = isolated_executor(&temporary, &state, "guru-a", capture.clone());
+        executor
+            .mcp_call(
+                json!({
+                    "server_id": "openbb",
+                    "tool_name": "activate_tools",
+                    "arguments": {"tool_names": ["equity_quote"]}
+                }),
+                "delivery-background-reset-activate",
+            )
+            .await
+            .unwrap();
+
+        let shutdown_started = Instant::now();
+        capture.shutdown_mcp().await;
+        let shutdown_elapsed = shutdown_started.elapsed();
+        assert!(
+            shutdown_elapsed < Duration::from_millis(100),
+            "MCP reset blocked turn shutdown: {shutdown_elapsed:?}"
+        );
+        assert_eq!(pool.idle_count().await, 0);
+        assert!(pool.acquire(&key).await.is_none());
+
+        wait_for_pool_idle(&pool, 1).await;
+        let reset = pool
+            .acquire(&key)
+            .await
+            .expect("successfully reset server should become reusable");
+        assert_eq!(
+            reset.tools.keys().cloned().collect::<BTreeSet<_>>(),
+            poolable_control_tools()
+        );
+        reset.discard().await;
         wait_for_exit_marker(&exited).await;
     }
 
@@ -1564,7 +2017,7 @@ done
             .await
             .insert("openbb".into(), server);
         capture.shutdown_mcp().await;
-        assert_eq!(pool.idle_count().await, 1);
+        wait_for_pool_idle(&pool, 1).await;
         assert!(pool.acquire(&key_other_guru).await.is_none());
         assert!(pool.acquire(&key_fmp).await.is_none());
         assert!(!exited.is_file());
@@ -1607,6 +2060,7 @@ done
             .await
             .insert("openbb".into(), server);
         capture.shutdown_mcp().await;
+        wait_for_pool_idle(&pool, 1).await;
 
         let first = pool.acquire(&key);
         let second = pool.acquire(&key);
@@ -1654,6 +2108,7 @@ done
             .await
             .insert("openbb".into(), server);
         capture.shutdown_mcp().await;
+        wait_for_pool_idle(&pool, 1).await;
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert!(pool.acquire(&key).await.is_none());
         wait_for_exit_marker(&exited).await;
@@ -1707,10 +2162,11 @@ done
             .await
             .insert("openbb".into(), server_b);
         capture_a.shutdown_mcp().await;
+        wait_for_pool_idle(&pool, 1).await;
         capture_b.shutdown_mcp().await;
         wait_for_exit_marker(&exited_a).await;
         assert!(!exited_b.is_file());
-        assert_eq!(pool.idle_count().await, 1);
+        wait_for_pool_idle(&pool, 1).await;
         let kept = pool
             .acquire(&key)
             .await

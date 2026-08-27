@@ -86,6 +86,13 @@ pub struct FinanceProgress {
     pub total: Option<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct FinanceToolCall {
+    pub name: String,
+    pub arguments: Value,
+    pub context: Value,
+}
+
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, FinanceError>>>>>;
 
 pub struct FinanceWorker {
@@ -236,6 +243,27 @@ impl FinanceWorker {
             deadline,
         )
         .await
+    }
+
+    pub async fn call_tools_ordered(
+        &self,
+        calls: Vec<FinanceToolCall>,
+        deadline: Duration,
+    ) -> Vec<Result<Value, FinanceError>> {
+        let started = Instant::now();
+        let mut results = Vec::with_capacity(calls.len());
+        for call in calls {
+            let remaining = deadline.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                results.push(Err(FinanceError::Timeout));
+                continue;
+            }
+            results.push(
+                self.call_tool(&call.name, call.arguments, call.context, remaining)
+                    .await,
+            );
+        }
+        results
     }
 
     async fn call(

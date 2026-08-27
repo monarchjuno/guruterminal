@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::VecDeque,
     fs::OpenOptions,
     io::Read,
     path::{Path, PathBuf},
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -20,9 +22,9 @@ use crate::{
     },
     pi::{PiEvent, PiProcess, PiSupportLaunchConfig},
     settings::{
-        catalog_allows_authorization, provider_credential_from_environment, provider_options,
-        saved_credential_exists, ConfiguredModel, ModelCatalogView, ModelProviderOption,
-        ModelRunControl,
+        catalog_allows_authorization, provider_credential_from_environment,
+        provider_credential_generation, provider_options, ConfiguredModel, ModelCatalogView,
+        ModelProviderOption, ModelRunControl,
     },
     support_coordinator::ProviderSupportLease,
     web::{SearchCancel, SearchHits, SearchProviderId, WebError, WebSearchQuery, WebSource},
@@ -32,6 +34,91 @@ const PROVIDER_PROTOCOL: &str = "guruterminal-provider/1";
 const MAX_RESULT_BYTES: u64 = 512 * 1024;
 const MAX_API_KEY_BYTES: usize = 8 * 1024;
 const SUPPORT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PROVIDER_MODEL_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_PROVIDER_MODEL_CACHE_ENTRIES: usize = 32;
+
+#[derive(Clone)]
+pub(crate) struct ProviderModelDiscoveryCache {
+    inner: Arc<Mutex<VecDeque<ProviderModelCacheEntry>>>,
+    ttl: Duration,
+    max_entries: usize,
+}
+
+struct ProviderModelCacheEntry {
+    provider: String,
+    credential_generation: String,
+    refreshed_at: Instant,
+}
+
+impl Default for ProviderModelDiscoveryCache {
+    fn default() -> Self {
+        Self::with_limits(PROVIDER_MODEL_CACHE_TTL, MAX_PROVIDER_MODEL_CACHE_ENTRIES)
+    }
+}
+
+impl ProviderModelDiscoveryCache {
+    fn with_limits(ttl: Duration, max_entries: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(VecDeque::new())),
+            ttl,
+            max_entries: max_entries.max(1),
+        }
+    }
+
+    fn is_fresh(&self, provider: &str, credential_generation: &str) -> bool {
+        self.is_fresh_at(provider, credential_generation, Instant::now())
+    }
+
+    fn is_fresh_at(&self, provider: &str, credential_generation: &str, now: Instant) -> bool {
+        let mut entries = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        entries.retain(|entry| now.saturating_duration_since(entry.refreshed_at) < self.ttl);
+        let Some(index) = entries.iter().position(|entry| entry.provider == provider) else {
+            return false;
+        };
+        let entry = entries
+            .remove(index)
+            .expect("provider model cache index disappeared");
+        if entry.credential_generation != credential_generation {
+            return false;
+        }
+        entries.push_back(entry);
+        true
+    }
+
+    fn record(&self, provider: &str, credential_generation: String) {
+        self.record_at(provider, credential_generation, Instant::now());
+    }
+
+    fn record_at(&self, provider: &str, credential_generation: String, now: Instant) {
+        let mut entries = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        entries.retain(|entry| {
+            entry.provider != provider
+                && now.saturating_duration_since(entry.refreshed_at) < self.ttl
+        });
+        while entries.len() >= self.max_entries {
+            entries.pop_front();
+        }
+        entries.push_back(ProviderModelCacheEntry {
+            provider: provider.to_owned(),
+            credential_generation,
+            refreshed_at: now,
+        });
+    }
+
+    pub(crate) fn invalidate(&self, provider: &str) {
+        let mut entries = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        entries.retain(|entry| entry.provider != provider);
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +195,9 @@ pub async fn provider_models(
     state: State<'_, AppState>,
 ) -> Result<ModelCatalogView, CommandError> {
     validate_provider(&request.provider)?;
+    if let Some(catalog) = cached_provider_models(&state, &request.provider)? {
+        return Ok(catalog);
+    }
     let admission = state.provider_support.try_acquire()?;
     discover_provider_models(&state, &request.provider, &admission).await
 }
@@ -133,6 +223,9 @@ pub async fn provider_configure(
     }
     let admission = state.provider_support.try_acquire()?;
     if api_key.is_some() || request.clear_saved_key {
+        // Invalidate before mutation: a support command can change its durable
+        // credential authority even when its response or shutdown later fails.
+        state.provider_model_cache.invalidate(&request.provider);
         let operation = if api_key.is_some() { "set" } else { "clear" };
         let result = run_support_command(
             &state,
@@ -172,6 +265,10 @@ pub async fn provider_connect(
         ));
     }
     let admission = state.provider_support.try_acquire_oauth()?;
+
+    // OAuth may replace durable authority before the support command reports
+    // completion, so stale model discovery must become unreachable first.
+    state.provider_model_cache.invalidate(&request.provider);
 
     let result = run_support_command(
         &state,
@@ -219,6 +316,7 @@ pub async fn provider_disconnect(
 ) -> Result<ModelCatalogView, CommandError> {
     validate_provider(&request.provider)?;
     let admission = state.provider_support.try_acquire()?;
+    state.provider_model_cache.invalidate(&request.provider);
     let result = run_support_command(
         &state,
         format!("/guruterminal-provider-logout {}", request.provider),
@@ -251,12 +349,17 @@ async fn discover_provider_models(
     admission: &ProviderSupportLease,
 ) -> Result<ModelCatalogView, CommandError> {
     let agent_data_dir = state.pi_agent_data_dir()?;
-    if !saved_credential_exists(&agent_data_dir, provider)?
-        && provider_credential_from_environment(provider).is_none()
+    let credential_generation = provider_credential_generation(&agent_data_dir, provider)?
+        .ok_or_else(|| {
+            CommandError::invalid("connect the provider before loading its Pi models")
+        })?;
+    // Recheck after admission. A preceding request may have completed while
+    // this caller was entering the support path.
+    if state
+        .provider_model_cache
+        .is_fresh(provider, &credential_generation)
     {
-        return Err(CommandError::invalid(
-            "connect the provider before loading its Pi models",
-        ));
+        return state.model_catalog_view();
     }
     let result = run_support_command(
         state,
@@ -279,7 +382,36 @@ async fn discover_provider_models(
         .map(|model| configured_model(provider, model))
         .collect::<Result<Vec<_>, _>>()?;
     state.replace_provider_models(provider, models)?;
+    // Do not cache a catalog if the credential authority rotated while Pi was
+    // discovering it. The result is still valid for this response, but the
+    // next request must refresh under the new authority.
+    if provider_credential_generation(&agent_data_dir, provider)?.as_deref()
+        == Some(credential_generation.as_str())
+    {
+        state
+            .provider_model_cache
+            .record(provider, credential_generation);
+    }
     state.model_catalog_view()
+}
+
+fn cached_provider_models(
+    state: &AppState,
+    provider: &str,
+) -> Result<Option<ModelCatalogView>, CommandError> {
+    let agent_data_dir = state.pi_agent_data_dir()?;
+    let Some(credential_generation) = provider_credential_generation(&agent_data_dir, provider)?
+    else {
+        state.provider_model_cache.invalidate(provider);
+        return Ok(None);
+    };
+    if state
+        .provider_model_cache
+        .is_fresh(provider, &credential_generation)
+    {
+        return state.model_catalog_view().map(Some);
+    }
+    Ok(None)
 }
 
 fn configured_model(
@@ -990,6 +1122,35 @@ mod tests {
         assert!(validate_provider("openai-codex").is_ok());
         assert!(validate_provider("anthropic").is_ok());
         assert!(validate_provider("not-a-provider").is_err());
+    }
+
+    #[test]
+    fn provider_model_cache_is_lru_bounded_and_authority_scoped() {
+        let cache = ProviderModelDiscoveryCache::with_limits(Duration::from_secs(60), 2);
+        let now = Instant::now();
+        cache.record_at("anthropic", "authority-a".into(), now);
+        cache.record_at("openai", "authority-b".into(), now);
+        assert!(cache.is_fresh_at("anthropic", "authority-a", now));
+
+        cache.record_at("google", "authority-c".into(), now);
+        assert!(cache.is_fresh_at("anthropic", "authority-a", now));
+        assert!(!cache.is_fresh_at("openai", "authority-b", now));
+        assert!(cache.is_fresh_at("google", "authority-c", now));
+
+        assert!(!cache.is_fresh_at("anthropic", "rotated", now));
+        assert!(!cache.is_fresh_at("anthropic", "authority-a", now));
+    }
+
+    #[test]
+    fn provider_model_cache_expires_and_invalidates_explicitly() {
+        let cache = ProviderModelDiscoveryCache::with_limits(Duration::from_secs(10), 2);
+        let now = Instant::now();
+        cache.record_at("anthropic", "authority-a".into(), now);
+        assert!(!cache.is_fresh_at("anthropic", "authority-a", now + Duration::from_secs(10)));
+
+        cache.record_at("anthropic", "authority-a".into(), now);
+        cache.invalidate("anthropic");
+        assert!(!cache.is_fresh_at("anthropic", "authority-a", now));
     }
 
     #[test]
