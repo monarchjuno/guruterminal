@@ -1110,9 +1110,7 @@ describe("Guru Terminal · Shell and Guru", () => {
       }),
     ).not.toBeInTheDocument();
     expect(
-      within(onboarding!).getByText(
-        /A contact email in Chat is enough for SEC filings/,
-      ),
+      within(onboarding!).getByText(/You pay the provider/),
     ).toBeVisible();
     await user.click(
       within(onboarding!).getByRole("button", { name: "Open Settings" }),

@@ -447,7 +447,6 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
                   <h1>Connect a model provider</h1>
                   <p>
                     You pay the provider. Guru Terminal never sees the key.
-                    A contact email in Chat is enough for SEC filings.
                   </p>
                   <div className="onboarding-actions">
                     <button
@@ -526,7 +525,6 @@ export function App({ bridge: providedBridge }: { bridge?: GuruTerminalBridge })
                         onModelUsed={recordSelectedModel}
                         workspaceActions={chatWorkspaceActions}
                         onAbortRecoveredRun={abortVisibleRecoveredChat}
-                        onOpenMarketplace={() => setTab("marketplace")}
                       />
                     ) : null}
                   </div>
