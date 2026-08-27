@@ -1,6 +1,86 @@
-import { fromGuruUIMessage, toGuruUIMessage } from "./ai-sdk";
+import {
+  applyChatProgressPatch,
+  applyChatProgressSnapshot,
+  fromGuruUIMessage,
+  TauriChatTransport,
+  toGuruUIMessage,
+} from "./ai-sdk";
 import type { GuruUIMessage } from "./ai-sdk";
-import type { ChatMessage } from "../types";
+import type {
+  ChatMessage,
+  ChatSendRequest,
+  ChatStreamEvent,
+  GuruTerminalBridge,
+} from "../types";
+
+describe("incremental chat progress", () => {
+  const initial = {
+    sequence: 0,
+    progress: {
+      startedAtMs: 10,
+      items: [
+        {
+          id: "tool-1",
+          kind: "tool" as const,
+          category: "web" as const,
+          operation: "search" as const,
+          action: "Searched the web",
+          status: "running" as const,
+        },
+      ],
+    },
+  };
+
+  it("applies ordered upserts, removals, and the terminal finish", () => {
+    const updated = applyChatProgressPatch(initial, {
+      sequence: 1,
+      upsertItems: [
+        { ...initial.progress.items[0], status: "succeeded" },
+        { id: "commentary-2", kind: "commentary", text: "Checked it." },
+      ],
+    });
+    const finished = applyChatProgressPatch(updated, {
+      sequence: 2,
+      removeItemIds: ["commentary-2"],
+      finishedAtMs: 20,
+    });
+
+    expect(finished).toEqual({
+      sequence: 2,
+      progress: {
+        startedAtMs: 10,
+        finishedAtMs: 20,
+        items: [{ ...initial.progress.items[0], status: "succeeded" }],
+      },
+    });
+  });
+
+  it("ignores stale and gapped patches until a later full snapshot", () => {
+    expect(
+      applyChatProgressPatch(initial, {
+        sequence: 2,
+        finishedAtMs: 20,
+      }),
+    ).toBe(initial);
+    expect(
+      applyChatProgressPatch(initial, {
+        sequence: 0,
+        removeItemIds: ["tool-1"],
+      }),
+    ).toBe(initial);
+
+    const replacement = {
+      startedAtMs: 10,
+      finishedAtMs: 30,
+      items: [],
+    };
+    expect(applyChatProgressSnapshot(initial, replacement, 3)).toEqual({
+      sequence: 3,
+      progress: replacement,
+    });
+    expect(applyChatProgressSnapshot(initial, replacement, 0)).toBe(initial);
+  });
+});
 
 describe("Guru chat UI message conversion", () => {
   it("keeps live progress commentary out of the answer position", () => {
@@ -34,6 +114,28 @@ describe("Guru chat UI message conversion", () => {
       kind: "commentary",
       text: "Draft answer text",
     });
+  });
+
+  it("projects only the active assistant draft into the live answer position", () => {
+    const live: GuruUIMessage = {
+      id: "assistant-draft",
+      role: "assistant",
+      metadata: { status: "streaming" },
+      parts: [
+        { type: "reasoning", text: "Old tool preamble", state: "done" },
+        { type: "reasoning", text: "Writing the answer", state: "streaming" },
+      ],
+    };
+
+    expect(fromGuruUIMessage(live).content).toBe("Writing the answer");
+    expect(
+      fromGuruUIMessage({
+        ...live,
+        parts: live.parts.map((part) =>
+          part.type === "reasoning" ? { ...part, state: "done" as const } : part,
+        ),
+      }).content,
+    ).toBe("");
   });
 
   it("uses a stable timestamp fallback for malformed UI messages", () => {
@@ -172,6 +274,30 @@ describe("Guru chat UI message conversion", () => {
     );
   });
 
+  it("round-trips content-free latency metrics", () => {
+    const message: ChatMessage = {
+      id: "assistant-performance",
+      role: "assistant",
+      content: "Measured response",
+      created_at: "2026-08-09T00:00:00.000Z",
+      performance: {
+        setupMs: 120,
+        firstTextMs: 480,
+        generationMs: 900,
+        totalMs: 940,
+        sessionCache: "warm",
+        inputTokens: 320,
+        outputTokens: 96,
+        cacheReadTokens: 256,
+        cacheWriteTokens: 64,
+      },
+    };
+
+    expect(fromGuruUIMessage(toGuruUIMessage(message)).performance).toEqual(
+      message.performance,
+    );
+  });
+
   it("round-trips a sealed Chat decision as structured data", () => {
     const message: ChatMessage = {
       id: "assistant-decision",
@@ -198,5 +324,84 @@ describe("Guru chat UI message conversion", () => {
     expect(fromGuruUIMessage(toGuruUIMessage(message)).decision).toEqual(
       message.decision,
     );
+  });
+});
+
+describe("Guru chat native stream transport", () => {
+  it("coalesces adjacent draft deltas before they reach the AI SDK reducer", async () => {
+    const bridge = {
+      chatSend: vi.fn(
+        async (
+          request: ChatSendRequest,
+          observer: (event: ChatStreamEvent) => void,
+        ) => {
+          observer({ type: "started", run_id: request.run_id });
+          observer({
+            type: "assistant_draft_started",
+            run_id: request.run_id,
+            draft_id: "draft-1",
+          });
+          observer({
+            type: "assistant_draft_delta",
+            run_id: request.run_id,
+            draft_id: "draft-1",
+            delta: "first ",
+          });
+          observer({
+            type: "assistant_draft_delta",
+            run_id: request.run_id,
+            draft_id: "draft-1",
+            delta: "second",
+          });
+          observer({
+            type: "assistant_draft_finished",
+            run_id: request.run_id,
+            draft_id: "draft-1",
+            disposition: "discarded",
+          });
+          observer({ type: "aborted", run_id: request.run_id });
+          return { run_id: request.run_id };
+        },
+      ),
+      chatAbort: vi.fn(async () => undefined),
+    } as unknown as GuruTerminalBridge;
+    const transport = new TauriChatTransport(bridge);
+    const stream = await transport.sendMessages({
+      trigger: "submit-message",
+      chatId: "thread-1",
+      messageId: undefined,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          parts: [{ type: "text", text: "Hello", state: "done" }],
+        },
+      ],
+      abortSignal: undefined,
+      body: {
+        guru_id: "guru-1",
+        thread_id: "thread-1",
+        use_memory: false,
+        update_memory: false,
+        model_profile_id: "model-1",
+        thinking_level: "medium",
+        run_options: {},
+      },
+    });
+    const chunks = [];
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-delta")).toEqual([
+      {
+        type: "reasoning-delta",
+        id: "draft-1",
+        delta: "first second",
+      },
+    ]);
   });
 });

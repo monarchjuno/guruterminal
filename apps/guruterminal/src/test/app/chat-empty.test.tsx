@@ -1,6 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MockGuruTerminalBridge } from "../../bridge";
 import { openApp } from "../renderApp";
 
 describe("Guru Terminal · empty Chat", () => {

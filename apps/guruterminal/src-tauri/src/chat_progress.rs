@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
@@ -225,6 +225,18 @@ pub struct ChatProgress {
     pub items: Vec<ChatProgressItem>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatProgressPatch {
+    pub sequence: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upsert_items: Vec<ChatProgressItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub remove_item_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<i64>,
+}
+
 impl ChatProgress {
     pub fn validate(&self, durable: bool) -> Result<(), DomainError> {
         if self.started_at_ms < 0
@@ -269,9 +281,16 @@ fn validate_text(value: &str, max: usize, message: &'static str) -> Result<(), D
 pub struct ChatProgressProjection {
     progress: ChatProgress,
     next_item: usize,
-    active_commentary: Option<usize>,
-    tool_items: HashMap<String, usize>,
-    system_items: HashMap<String, usize>,
+    next_patch_sequence: u64,
+    active_commentary: Option<String>,
+    tool_items: HashMap<String, String>,
+    system_items: HashMap<String, String>,
+    item_indices: HashMap<String, usize>,
+    dirty_item_ids: Vec<String>,
+    dirty_item_set: HashSet<String>,
+    published_item_ids: HashSet<String>,
+    pending_remove_item_ids: Vec<String>,
+    pending_finished_at_ms: Option<i64>,
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
@@ -303,9 +322,16 @@ impl ChatProgressProjection {
                 items: Vec::new(),
             },
             next_item: 1,
+            next_patch_sequence: 1,
             active_commentary: None,
             tool_items: HashMap::new(),
             system_items: HashMap::new(),
+            item_indices: HashMap::new(),
+            dirty_item_ids: Vec::new(),
+            dirty_item_set: HashSet::new(),
+            published_item_ids: HashSet::new(),
+            pending_remove_item_ids: Vec::new(),
+            pending_finished_at_ms: None,
         }
     }
 
@@ -321,28 +347,31 @@ impl ChatProgressProjection {
         if delta.is_empty() {
             return;
         }
-        let index = match self.active_commentary {
-            Some(index) => index,
+        let id = match self.active_commentary.clone() {
+            Some(id) => id,
             None => {
                 let index = self.progress.items.len();
                 let id = self.next_id("commentary");
                 self.progress.items.push(ChatProgressItem::Commentary {
-                    id,
+                    id: id.clone(),
                     text: String::new(),
                 });
-                self.active_commentary = Some(index);
-                index
+                self.item_indices.insert(id.clone(), index);
+                self.active_commentary = Some(id.clone());
+                id
             }
         };
+        let index = self.item_indices[&id];
         if let ChatProgressItem::Commentary { text, .. } = &mut self.progress.items[index] {
             text.push_str(delta);
         }
+        self.mark_dirty(&id);
     }
 
     pub fn finish_assistant_turn(&mut self, is_final: bool) {
         if is_final {
-            if let Some(index) = self.active_commentary.take() {
-                self.progress.items.remove(index);
+            if let Some(id) = self.active_commentary.take() {
+                self.remove_item(&id);
             }
         } else {
             self.close_commentary();
@@ -362,7 +391,7 @@ impl ChatProgressProjection {
         let id = self.next_id("tool");
         let index = self.progress.items.len();
         self.progress.items.push(ChatProgressItem::Tool {
-            id,
+            id: id.clone(),
             category: presentation.category,
             operation: presentation.operation,
             action: presentation.action,
@@ -372,11 +401,16 @@ impl ChatProgressProjection {
             started_at_ms: at_ms.max(0),
             finished_at_ms: None,
         });
-        self.tool_items.insert(tool_call_id.to_owned(), index);
+        self.item_indices.insert(id.clone(), index);
+        self.tool_items.insert(tool_call_id.to_owned(), id.clone());
+        self.mark_dirty(&id);
     }
 
     pub fn finish_tool(&mut self, tool_call_id: &str, failed: bool, at_ms: i64) {
-        let Some(index) = self.tool_items.remove(tool_call_id) else {
+        let Some(id) = self.tool_items.remove(tool_call_id) else {
+            return;
+        };
+        let Some(&index) = self.item_indices.get(&id) else {
             return;
         };
         if let Some(ChatProgressItem::Tool {
@@ -393,6 +427,7 @@ impl ChatProgressProjection {
             };
             *finished_at_ms = Some(at_ms.max(*started_at_ms));
         }
+        self.mark_dirty(&id);
     }
 
     pub fn start_system(
@@ -407,7 +442,7 @@ impl ChatProgressProjection {
         let id = self.next_id("system");
         let index = self.progress.items.len();
         self.progress.items.push(ChatProgressItem::System {
-            id,
+            id: id.clone(),
             category: ChatProgressCategory::System,
             operation,
             action: action.to_owned(),
@@ -417,11 +452,16 @@ impl ChatProgressProjection {
             started_at_ms: at_ms.max(0),
             finished_at_ms: None,
         });
-        self.system_items.insert(key.to_owned(), index);
+        self.item_indices.insert(id.clone(), index);
+        self.system_items.insert(key.to_owned(), id.clone());
+        self.mark_dirty(&id);
     }
 
     pub fn finish_system(&mut self, key: &str, failed: bool, at_ms: i64) {
-        let Some(index) = self.system_items.remove(key) else {
+        let Some(id) = self.system_items.remove(key) else {
+            return;
+        };
+        let Some(&index) = self.item_indices.get(&id) else {
             return;
         };
         if let Some(ChatProgressItem::System {
@@ -438,45 +478,114 @@ impl ChatProgressProjection {
             };
             *finished_at_ms = Some(at_ms.max(*started_at_ms));
         }
+        self.mark_dirty(&id);
     }
 
     pub fn snapshot(&self) -> ChatProgress {
         self.progress.clone()
     }
 
+    pub fn latest_patch_sequence(&self) -> u64 {
+        self.next_patch_sequence.saturating_sub(1)
+    }
+
+    pub fn take_patch(&mut self) -> Option<ChatProgressPatch> {
+        let dirty_item_ids = std::mem::take(&mut self.dirty_item_ids);
+        let mut upsert_items = Vec::with_capacity(dirty_item_ids.len());
+        for id in dirty_item_ids {
+            self.dirty_item_set.remove(&id);
+            if let Some(item) = self
+                .item_indices
+                .get(&id)
+                .and_then(|index| self.progress.items.get(*index))
+                .cloned()
+            {
+                self.published_item_ids.insert(id);
+                upsert_items.push(item);
+            }
+        }
+        let remove_item_ids = std::mem::take(&mut self.pending_remove_item_ids);
+        let finished_at_ms = self.pending_finished_at_ms.take();
+        if upsert_items.is_empty() && remove_item_ids.is_empty() && finished_at_ms.is_none() {
+            return None;
+        }
+        let sequence = self.next_patch_sequence;
+        self.next_patch_sequence = self.next_patch_sequence.saturating_add(1);
+        Some(ChatProgressPatch {
+            sequence,
+            upsert_items,
+            remove_item_ids,
+            finished_at_ms,
+        })
+    }
+
     pub fn finish(&mut self, finished_at_ms: i64, stopped: bool) -> Option<ChatProgress> {
         self.close_commentary();
         let closed_at = finished_at_ms.max(self.progress.started_at_ms);
         self.progress.finished_at_ms = Some(closed_at);
+        let mut changed_item_ids = Vec::new();
         for item in &mut self.progress.items {
             match item {
                 ChatProgressItem::Tool {
+                    id,
                     status,
                     started_at_ms,
                     finished_at_ms,
                     ..
                 }
                 | ChatProgressItem::System {
+                    id,
                     status,
                     started_at_ms,
                     finished_at_ms,
                     ..
                 } => {
+                    let mut changed = false;
                     if *status == ChatProgressStatus::Running {
                         *status = if stopped {
                             ChatProgressStatus::Stopped
                         } else {
                             ChatProgressStatus::Failed
                         };
+                        changed = true;
                     }
                     if finished_at_ms.is_none() {
                         *finished_at_ms = Some(closed_at.max(*started_at_ms));
+                        changed = true;
+                    }
+                    if changed {
+                        changed_item_ids.push(id.clone());
                     }
                 }
                 _ => {}
             }
         }
+        for id in changed_item_ids {
+            self.mark_dirty(&id);
+        }
+        self.pending_finished_at_ms = Some(closed_at);
         (!self.progress.items.is_empty()).then(|| self.progress.clone())
+    }
+
+    fn mark_dirty(&mut self, id: &str) {
+        if self.dirty_item_set.insert(id.to_owned()) {
+            self.dirty_item_ids.push(id.to_owned());
+        }
+    }
+
+    fn remove_item(&mut self, id: &str) {
+        let Some(index) = self.item_indices.remove(id) else {
+            return;
+        };
+        self.progress.items.remove(index);
+        for (item_index, item) in self.progress.items.iter().enumerate().skip(index) {
+            self.item_indices.insert(item.id().to_owned(), item_index);
+        }
+        self.dirty_item_set.remove(id);
+        self.dirty_item_ids.retain(|dirty_id| dirty_id != id);
+        if self.published_item_ids.remove(id) {
+            self.pending_remove_item_ids.push(id.to_owned());
+        }
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -606,7 +715,7 @@ fn summarize_tool(
             ChatProgressCategory::Finance,
             ChatProgressOperation::Calculate,
             "Calculated financial data",
-            string(&["operation", "calculation", "kind"]),
+            finance_calculate_target(args),
         ),
         "finance_resolve_entity" => presentation(
             ChatProgressCategory::Finance,
@@ -840,6 +949,25 @@ fn join_values(args: &Value, keys: &[&str]) -> Option<String> {
     (!values.is_empty()).then(|| truncate_utf8(&values.join(" · "), 480).to_owned())
 }
 
+fn finance_calculate_target(args: &Value) -> Option<String> {
+    let args = flatten_params(args);
+    if let Some(direct) = ["operation", "calculation", "kind"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(Value::as_str))
+        .and_then(safe_value)
+    {
+        return Some(direct);
+    }
+    let names = args
+        .get("operations")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| item.get("operation").and_then(Value::as_str))
+        .filter_map(safe_value)
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then(|| truncate_utf8(&names.join(" · "), 480).to_owned())
+}
+
 fn package_names(args: &Value) -> Option<String> {
     let packages = args
         .get("packages")
@@ -901,6 +1029,70 @@ mod tests {
         assert!(
             matches!(&snapshot.items[0], ChatProgressItem::Commentary { text, .. } if text == "I will inspect the files.")
         );
+    }
+
+    #[test]
+    fn patches_coalesce_commentary_and_only_upsert_changed_items() {
+        let mut projection = ChatProgressProjection::new(10);
+        projection.start_assistant_turn();
+        projection.append_commentary("I will ");
+        projection.append_commentary("inspect this.");
+
+        let commentary = projection.take_patch().unwrap();
+        assert_eq!(commentary.sequence, 1);
+        assert_eq!(commentary.upsert_items.len(), 1);
+        assert!(matches!(
+            &commentary.upsert_items[0],
+            ChatProgressItem::Commentary { text, .. } if text == "I will inspect this."
+        ));
+        assert!(projection.take_patch().is_none());
+
+        projection.start_tool("call-1", "web_search", &json!({"query": "btc"}), None, 11);
+        let started = projection.take_patch().unwrap();
+        assert_eq!(started.sequence, 2);
+        assert_eq!(started.upsert_items.len(), 1);
+        assert!(matches!(
+            started.upsert_items[0],
+            ChatProgressItem::Tool {
+                status: ChatProgressStatus::Running,
+                ..
+            }
+        ));
+
+        projection.finish_tool("call-1", false, 12);
+        let finished = projection.take_patch().unwrap();
+        assert_eq!(finished.sequence, 3);
+        assert_eq!(finished.upsert_items.len(), 1);
+        assert!(matches!(
+            finished.upsert_items[0],
+            ChatProgressItem::Tool {
+                status: ChatProgressStatus::Succeeded,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn patches_remove_published_final_commentary_and_mark_terminal_finish() {
+        let mut projection = ChatProgressProjection::new(10);
+        projection.start_assistant_turn();
+        projection.append_commentary("Final answer draft");
+        let published = projection.take_patch().unwrap();
+        let commentary_id = published.upsert_items[0].id().to_owned();
+
+        projection.finish_assistant_turn(true);
+        let removed = projection.take_patch().unwrap();
+        assert_eq!(removed.sequence, 2);
+        assert!(removed.upsert_items.is_empty());
+        assert_eq!(removed.remove_item_ids, vec![commentary_id]);
+
+        assert!(projection.finish(20, false).is_none());
+        let terminal = projection.take_patch().unwrap();
+        assert_eq!(terminal.sequence, 3);
+        assert_eq!(terminal.finished_at_ms, Some(20));
+        assert!(terminal.upsert_items.is_empty());
+        assert_eq!(projection.latest_patch_sequence(), 3);
+        assert_eq!(projection.snapshot().finished_at_ms, Some(20));
     }
 
     #[test]
@@ -1169,5 +1361,36 @@ mod tests {
         let presentation = summarize_tool("web_fetch", &json!({}), Some(&unsafe_source));
         assert!(presentation.target.is_none());
         assert!(presentation.href.is_none());
+    }
+
+    #[test]
+    fn finance_calculate_progress_uses_batched_operation_names() {
+        let single = summarize_tool(
+            "finance_calculate",
+            &json!({
+                "operations": [{
+                    "id": "pct",
+                    "operation": "percentage_change",
+                    "arguments": { "start": "80", "end": "100", "precision": 2 }
+                }]
+            }),
+            None,
+        );
+        assert_eq!(single.target.as_deref(), Some("percentage_change"));
+
+        let batched = summarize_tool(
+            "finance_calculate",
+            &json!({
+                "operations": [
+                    { "id": "pct", "operation": "percentage_change" },
+                    { "id": "cagr", "operation": "compound_annual_growth_rate" }
+                ]
+            }),
+            None,
+        );
+        assert_eq!(
+            batched.target.as_deref(),
+            Some("percentage_change · compound_annual_growth_rate")
+        );
     }
 }

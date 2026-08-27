@@ -9,7 +9,7 @@ use crate::{
     app::{CommandError, GuruAvailability, GuruRecoveryAction},
     chart_engine::ChartDataset,
     chat_artifacts::{ChatArtifact, ChatArtifactRef, ChatArtifactRevision},
-    chat_progress::ChatProgress,
+    chat_progress::{ChatProgress, ChatProgressPatch},
     domain::{
         CanonicalMemoryKind, ChatDecision, ChatMessageStatus, ChatRole, ChatSession, MemoryAccess,
         MemoryRefSnapshot,
@@ -257,13 +257,36 @@ pub enum ChatStreamEvent {
         run_id: String,
         text: String,
     },
+    AssistantDraftStarted {
+        run_id: String,
+        draft_id: String,
+    },
+    AssistantDraftDelta {
+        run_id: String,
+        draft_id: String,
+        delta: String,
+    },
+    AssistantDraftFinished {
+        run_id: String,
+        draft_id: String,
+        disposition: AssistantDraftDisposition,
+    },
+    GenerationFinished {
+        run_id: String,
+        performance: ChatPerformanceDto,
+    },
     Title {
         run_id: String,
         title: String,
     },
     Progress {
         run_id: String,
+        sequence: u64,
         progress: ChatProgress,
+    },
+    ProgressPatch {
+        run_id: String,
+        patch: ChatProgressPatch,
     },
     MemoryUpdate {
         run_id: String,
@@ -284,6 +307,7 @@ pub enum ChatStreamEvent {
         created_at: String,
         execution_model: Box<ExecutionModelLock>,
         agent_harness: Box<AgentHarnessSnapshot>,
+        performance: ChatPerformanceDto,
     },
     Aborted {
         run_id: String,
@@ -299,6 +323,37 @@ pub enum ChatStreamEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         progress: Option<ChatProgress>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantDraftDisposition {
+    Final,
+    Commentary,
+    Discarded,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatPerformanceDto {
+    pub setup_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_text_ms: Option<u64>,
+    pub generation_ms: u64,
+    pub total_ms: u64,
+    pub session_cache: ChatSessionCacheStatusDto,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatSessionCacheStatusDto {
+    #[default]
+    Cold,
+    Warm,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -54,6 +54,17 @@ describe("Guru Terminal · Chat progress", () => {
             capability_ids: [],
             digest: "a".repeat(64),
           },
+          performance: {
+            setupMs: 120,
+            firstTextMs: 480,
+            generationMs: 780,
+            totalMs: 940,
+            sessionCache: "warm",
+            inputTokens: 100,
+            outputTokens: 20,
+            cacheReadTokens: 80,
+            cacheWriteTokens: 0,
+          },
         });
         return { run_id: request.run_id };
       },
@@ -85,6 +96,10 @@ describe("Guru Terminal · Chat progress", () => {
     expect(openExternalUrl).not.toHaveBeenCalled();
     finishRun();
     await screen.findByText("Source checked.");
+    expect(screen.getByText("First text 480ms · 940ms total")).toHaveAttribute(
+      "title",
+      expect.stringContaining("warm session"),
+    );
     const settled = await screen.findByLabelText("Work progress");
     expect(settled).toBeInTheDocument();
     expect(

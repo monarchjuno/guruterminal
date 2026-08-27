@@ -37,7 +37,16 @@ export function ChatConversation({
   onReadAttachment,
   onRevertMemory,
 }: Props) {
-  const scrollRevision = useMemo(() => JSON.stringify(messages), [messages]);
+  const scrollRevision = useMemo(() => {
+    const last = messages.at(-1);
+    return [
+      messages.length,
+      messageKeys.at(-1) ?? "",
+      last?.status ?? "",
+      last?.content.length ?? 0,
+      last?.progress?.items.length ?? 0,
+    ].join(":");
+  }, [messageKeys, messages]);
   return (
     <Conversation
       className="message-scroll"

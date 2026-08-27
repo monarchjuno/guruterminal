@@ -31,7 +31,7 @@ use crate::{
     guru_root::profile_workspace,
     pi::{PiError, PiEvent, PiImageContent, PiLaunchConfig, PiProcess},
     pi_execution::{
-        configure_pi_session_execution, read_pi_entries, PiEntriesState, PiExecutionConfig,
+        configure_pi_session_and_read_entries, read_pi_entries, PiEntriesState, PiExecutionConfig,
         PiSessionFileRequirement, PiSessionState,
     },
     pi_response::{AssistantTurnCapture, AssistantTurnEnd},
@@ -53,8 +53,9 @@ use super::{
     now_ms, require_text,
     tool_executor::{AppToolExecutor, ToolCapture},
     types::{
-        memory_ref_dto, ChatControlModeDto, ChatControlReceiptDto, ChatControlRequestDto,
-        ChatSendRequest, ChatStreamEvent, RunStarted,
+        memory_ref_dto, AssistantDraftDisposition, ChatControlModeDto, ChatControlReceiptDto,
+        ChatControlRequestDto, ChatPerformanceDto, ChatSendRequest, ChatSessionCacheStatusDto,
+        ChatStreamEvent, RunStarted,
     },
     MAX_CHAT_OUTPUT_BYTES, MAX_PROMPT_BYTES,
 };
@@ -76,7 +77,9 @@ fn pi_event_stream_failure(
     error: tokio::sync::broadcast::error::RecvError,
 ) -> Option<&'static str> {
     match error {
-        tokio::sync::broadcast::error::RecvError::Lagged(_) => None,
+        tokio::sync::broadcast::error::RecvError::Lagged(_) => {
+            Some("Pi event stream fell behind and was stopped safely")
+        }
         tokio::sync::broadcast::error::RecvError::Closed => Some("Pi event stream was interrupted"),
     }
 }
@@ -134,6 +137,38 @@ fn compaction_end_failed(payload: &Value) -> bool {
         || !payload.get("result").is_some_and(Value::is_object)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct AssistantTokenUsage {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl AssistantTokenUsage {
+    fn observe_message_end(&mut self, payload: &Value) {
+        let Some(usage) = payload
+            .get("message")
+            .and_then(|message| message.get("usage"))
+        else {
+            return;
+        };
+        self.input = self
+            .input
+            .saturating_add(usage.get("input").and_then(Value::as_u64).unwrap_or(0));
+        self.output = self
+            .output
+            .saturating_add(usage.get("output").and_then(Value::as_u64).unwrap_or(0));
+        self.cache_read = self
+            .cache_read
+            .saturating_add(usage.get("cacheRead").and_then(Value::as_u64).unwrap_or(0));
+        self.cache_write = self
+            .cache_write
+            .saturating_add(usage.get("cacheWrite").and_then(Value::as_u64).unwrap_or(0));
+    }
+}
+
+#[cfg(test)]
 pub(crate) async fn collect_learned_memory_index(
     state: &AppState,
     workspace: &crate::guru_root::BoundGuruRoot,
@@ -150,6 +185,7 @@ pub(crate) async fn collect_learned_memory_index(
     agent_harness::learned_memory_index_from_records(&records, &recent_ids, cutoff)
 }
 
+#[cfg(test)]
 pub(super) async fn collect_charter(
     state: &AppState,
     workspace: &crate::guru_root::BoundGuruRoot,
@@ -402,7 +438,7 @@ async fn launch_chat_pi(
         ChatPiResume::Cold { .. } => PiSessionFileRequirement::ColdMayBeUnpersisted,
         ChatPiResume::Warm { .. } => PiSessionFileRequirement::Persisted,
     };
-    match configure_pi_session_execution(
+    match configure_pi_session_and_read_entries(
         &pi,
         &mut events,
         execution,
@@ -412,13 +448,7 @@ async fn launch_chat_pi(
     )
     .await
     {
-        Ok((model, state)) => {
-            let entries = match read_pi_entries(&pi, &mut events, None).await {
-                Ok(entries) => entries,
-                Err(error) => {
-                    return Err(stopped_launch_failure(pi, error).await);
-                }
-            };
+        Ok((model, state, entries)) => {
             let acceptable = match resume {
                 ChatPiResume::Cold { .. } => entries.cold_startup_only,
                 ChatPiResume::Warm { cache } => entries.matches_cache(cache),
@@ -682,15 +712,50 @@ fn empty_memory_trace() -> Result<DurableMemoryTrace, CommandError> {
     durable_memory_trace(Vec::new(), None, &[])
 }
 
-fn emit_chat_progress(
+fn emit_chat_progress_snapshot(
     on_event: &Channel<ChatStreamEvent>,
     run_id: &str,
     projection: &ChatProgressProjection,
+    sequence: u64,
 ) {
     let _ = on_event.send(ChatStreamEvent::Progress {
         run_id: run_id.to_owned(),
+        sequence,
         progress: projection.snapshot(),
     });
+}
+
+fn emit_chat_progress_patch(
+    on_event: &Channel<ChatStreamEvent>,
+    run_id: &str,
+    projection: &mut ChatProgressProjection,
+) {
+    if let Some(patch) = projection.take_patch() {
+        let _ = on_event.send(ChatStreamEvent::ProgressPatch {
+            run_id: run_id.to_owned(),
+            patch,
+        });
+    }
+}
+
+fn finish_chat_progress(
+    on_event: &Channel<ChatStreamEvent>,
+    run_id: &str,
+    projection: &mut ChatProgressProjection,
+    finished_at_ms: i64,
+    stopped: bool,
+) -> Option<ChatProgress> {
+    let snapshot = projection.finish(finished_at_ms, stopped);
+    emit_chat_progress_patch(on_event, run_id, projection);
+    // A single terminal snapshot lets a renderer that missed a sequenced patch
+    // resynchronize. Renderers already at this sequence ignore the duplicate.
+    emit_chat_progress_snapshot(
+        on_event,
+        run_id,
+        projection,
+        projection.latest_patch_sequence(),
+    );
+    snapshot
 }
 
 fn emit_completed_chat(
@@ -700,6 +765,7 @@ fn emit_completed_chat(
     title: Option<String>,
     execution_model: &ExecutionModelLock,
     agent_harness: &AgentHarnessSnapshot,
+    performance: ChatPerformanceDto,
 ) {
     if !message.memory_refs.is_empty() {
         let _ = on_event.send(ChatStreamEvent::Memory {
@@ -738,7 +804,12 @@ fn emit_completed_chat(
         created_at: iso_time(message.created_at_ms).unwrap_or_default(),
         execution_model: Box::new(execution_model.clone()),
         agent_harness: Box::new(agent_harness.clone()),
+        performance,
     });
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(super) struct CanonicalCompletionExpectation<'a> {
@@ -1663,6 +1734,7 @@ pub async fn chat_send(
     on_event: Channel<ChatStreamEvent>,
     state: State<'_, AppState>,
 ) -> Result<RunStarted, CommandError> {
+    let chat_started_at = Instant::now();
     enforce_prompt_memory_policy(
         &request.prompt,
         &mut request.use_memory,
@@ -1692,6 +1764,13 @@ pub async fn chat_send(
     let _ = on_event.send(ChatStreamEvent::Started {
         run_id: run_id.clone(),
     });
+    let progress_started_at_ms = now_ms();
+    emit_chat_progress_snapshot(
+        &on_event,
+        &run_id,
+        &ChatProgressProjection::new(progress_started_at_ms),
+        0,
+    );
     let prompt = request.prompt.trim().to_owned();
     if prompt.len() > MAX_PROMPT_BYTES || prompt.contains('\0') {
         return Err(CommandError::invalid(format!(
@@ -1795,7 +1874,10 @@ pub async fn chat_send(
     }
     let had_prior_messages = !chat.messages.is_empty();
     let expected_chat = chat.clone();
-    workspace.validate(&runtime).await.map_err(map_internal)?;
+    let knowledge_context = workspace
+        .knowledge_context(&runtime)
+        .await
+        .map_err(map_internal)?;
     skill_files.extend(materialize_user_skill_snapshots(
         state.store.as_ref(),
         &profile.id,
@@ -1803,7 +1885,13 @@ pub async fn chat_send(
         &run_scratch.path().join("user-skills"),
     )?);
     let memory_revision = if request.use_memory {
-        Some(workspace.inspect_memory_tree().map_err(map_internal)?.0)
+        Some(
+            knowledge_context
+                .get("revision")
+                .and_then(Value::as_str)
+                .ok_or_else(|| CommandError::internal("Memory context omitted its revision"))?
+                .to_owned(),
+        )
     } else {
         None
     };
@@ -1997,8 +2085,18 @@ pub async fn chat_send(
             .as_of
             .as_deref()
             .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
-        let learned_index = collect_learned_memory_index(&state, &workspace, cutoff).await;
-        let charter = collect_charter(&state, &workspace, cutoff).await;
+        let records = knowledge_context
+            .get("records")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let recent_ids = crate::memory_git::recent_wiki_lens_ids(workspace.path(), 24);
+        let learned_index =
+            agent_harness::learned_memory_index_from_records(&records, &recent_ids, cutoff);
+        let charter = knowledge_context
+            .get("charter")
+            .filter(|value| !value.is_null())
+            .and_then(|value| agent_harness::charter_from_knowledge_read(value, cutoff));
         (learned_index, charter)
     } else {
         (Vec::new(), None)
@@ -2179,6 +2277,7 @@ pub async fn chat_send(
             ));
         }
     };
+    let setup_ms = elapsed_millis(chat_started_at);
     let first_provider_body_watchdog_started_at = Instant::now();
     if *cancel.borrow() {
         let _ = pi.abort().await;
@@ -2226,7 +2325,12 @@ pub async fn chat_send(
         let mut settled_controls = BTreeMap::new();
         let mut next_control_sequence = 0_u64;
         let mut next_control_to_persist = 0_u64;
-        let mut progress = ChatProgressProjection::new(now_ms());
+        let mut next_assistant_draft_sequence = 0_u64;
+        let mut active_assistant_draft_id: Option<String> = None;
+        let mut first_text_ms: Option<u64> = None;
+        let mut generation_ms: Option<u64> = None;
+        let mut token_usage = AssistantTokenUsage::default();
+        let mut progress = ChatProgressProjection::new(progress_started_at_ms);
         let mut first_provider_body_watchdog =
             FirstProviderBodyWatchdog::new(first_provider_body_watchdog_started_at);
         let first_provider_body_progress_timer = tokio::time::sleep_until(
@@ -2335,6 +2439,18 @@ pub async fn chat_send(
                                         == Some("assistant")
                                     {
                                         progress.start_assistant_turn();
+                                        next_assistant_draft_sequence =
+                                            next_assistant_draft_sequence.saturating_add(1);
+                                        let draft_id = format!(
+                                            "assistant-draft-{}",
+                                            next_assistant_draft_sequence
+                                        );
+                                        active_assistant_draft_id = Some(draft_id.clone());
+                                        let _ =
+                                            on_event.send(ChatStreamEvent::AssistantDraftStarted {
+                                                run_id: task_run_id.clone(),
+                                                draft_id,
+                                            });
                                     }
                                 }
                                 Some("tool_execution_start") => {
@@ -2370,7 +2486,11 @@ pub async fn chat_send(
                                             web_source.as_ref(),
                                             now_ms(),
                                         );
-                                        emit_chat_progress(&on_event, &task_run_id, &progress);
+                                        emit_chat_progress_patch(
+                                            &on_event,
+                                            &task_run_id,
+                                            &mut progress,
+                                        );
                                     }
                                 }
                                 Some("tool_execution_end") => {
@@ -2385,7 +2505,11 @@ pub async fn chat_send(
                                                 .unwrap_or(false),
                                             now_ms(),
                                         );
-                                        emit_chat_progress(&on_event, &task_run_id, &progress);
+                                        emit_chat_progress_patch(
+                                            &on_event,
+                                            &task_run_id,
+                                            &mut progress,
+                                        );
                                     }
                                 }
                                 Some("compaction_start") => {
@@ -2405,7 +2529,11 @@ pub async fn chat_send(
                                         None,
                                         now_ms(),
                                     );
-                                    emit_chat_progress(&on_event, &task_run_id, &progress);
+                                    emit_chat_progress_patch(
+                                        &on_event,
+                                        &task_run_id,
+                                        &mut progress,
+                                    );
                                 }
                                 Some("compaction_end") => {
                                     let now = Instant::now();
@@ -2422,7 +2550,11 @@ pub async fn chat_send(
                                         compaction_end_failed(&payload),
                                         now_ms(),
                                     );
-                                    emit_chat_progress(&on_event, &task_run_id, &progress);
+                                    emit_chat_progress_patch(
+                                        &on_event,
+                                        &task_run_id,
+                                        &mut progress,
+                                    );
                                 }
                                 Some("auto_retry_start") => {
                                     let target = match (
@@ -2442,7 +2574,11 @@ pub async fn chat_send(
                                         target,
                                         now_ms(),
                                     );
-                                    emit_chat_progress(&on_event, &task_run_id, &progress);
+                                    emit_chat_progress_patch(
+                                        &on_event,
+                                        &task_run_id,
+                                        &mut progress,
+                                    );
                                 }
                                 Some("auto_retry_end") => {
                                     progress.finish_system(
@@ -2451,7 +2587,11 @@ pub async fn chat_send(
                                             == Some(false),
                                         now_ms(),
                                     );
-                                    emit_chat_progress(&on_event, &task_run_id, &progress);
+                                    emit_chat_progress_patch(
+                                        &on_event,
+                                        &task_run_id,
+                                        &mut progress,
+                                    );
                                 }
                                 Some("message_update") => {
                                     let assistant_event = payload.get("assistantMessageEvent");
@@ -2465,6 +2605,9 @@ pub async fn chat_send(
                                                 .and_then(|event| event.get("delta"))
                                                 .and_then(Value::as_str)
                                             {
+                                                first_text_ms.get_or_insert_with(|| {
+                                                    elapsed_millis(chat_started_at)
+                                                });
                                                 if let Err(message) = assistant_capture
                                                     .observe_text_delta(
                                                         delta,
@@ -2476,17 +2619,24 @@ pub async fn chat_send(
                                                     break;
                                                 }
                                                 progress.append_commentary(delta);
-                                                emit_chat_progress(
-                                                    &on_event,
-                                                    &task_run_id,
-                                                    &progress,
-                                                );
+                                                if let Some(draft_id) =
+                                                    active_assistant_draft_id.as_ref()
+                                                {
+                                                    let _ = on_event.send(
+                                                        ChatStreamEvent::AssistantDraftDelta {
+                                                            run_id: task_run_id.clone(),
+                                                            draft_id: draft_id.clone(),
+                                                            delta: delta.to_owned(),
+                                                        },
+                                                    );
+                                                }
                                             }
                                         }
                                         _ => {}
                                     }
                                 }
                                 Some("message_end") => {
+                                    token_usage.observe_message_end(&payload);
                                     match assistant_capture
                                         .observe_message_end(&payload, MAX_CHAT_OUTPUT_BYTES)
                                     {
@@ -2498,7 +2648,22 @@ pub async fn chat_send(
                                                 format!("\n\n{authoritative}")
                                             };
                                             content.push_str(&streamed);
-                                            emit_chat_progress(&on_event, &task_run_id, &progress);
+                                            emit_chat_progress_patch(
+                                                &on_event,
+                                                &task_run_id,
+                                                &mut progress,
+                                            );
+                                            if let Some(draft_id) = active_assistant_draft_id.take()
+                                            {
+                                                let _ = on_event.send(
+                                                    ChatStreamEvent::AssistantDraftFinished {
+                                                        run_id: task_run_id.clone(),
+                                                        draft_id,
+                                                        disposition:
+                                                            AssistantDraftDisposition::Final,
+                                                    },
+                                                );
+                                            }
                                             let _ = on_event.send(ChatStreamEvent::Delta {
                                                 run_id: task_run_id.clone(),
                                                 text: streamed,
@@ -2506,7 +2671,22 @@ pub async fn chat_send(
                                         }
                                         Ok(Some(AssistantTurnEnd::ToolUse(_))) => {
                                             progress.finish_assistant_turn(false);
-                                            emit_chat_progress(&on_event, &task_run_id, &progress);
+                                            emit_chat_progress_patch(
+                                                &on_event,
+                                                &task_run_id,
+                                                &mut progress,
+                                            );
+                                            if let Some(draft_id) = active_assistant_draft_id.take()
+                                            {
+                                                let _ = on_event.send(
+                                                    ChatStreamEvent::AssistantDraftFinished {
+                                                        run_id: task_run_id.clone(),
+                                                        draft_id,
+                                                        disposition:
+                                                            AssistantDraftDisposition::Commentary,
+                                                    },
+                                                );
+                                            }
                                         }
                                         Ok(Some(
                                             AssistantTurnEnd::Length
@@ -2514,6 +2694,22 @@ pub async fn chat_send(
                                             | AssistantTurnEnd::Aborted,
                                         )) => {
                                             progress.finish_assistant_turn(false);
+                                            emit_chat_progress_patch(
+                                                &on_event,
+                                                &task_run_id,
+                                                &mut progress,
+                                            );
+                                            if let Some(draft_id) = active_assistant_draft_id.take()
+                                            {
+                                                let _ = on_event.send(
+                                                    ChatStreamEvent::AssistantDraftFinished {
+                                                        run_id: task_run_id.clone(),
+                                                        draft_id,
+                                                        disposition:
+                                                            AssistantDraftDisposition::Discarded,
+                                                    },
+                                                );
+                                            }
                                         }
                                         Ok(None) => {}
                                         Err(message) => {
@@ -2553,6 +2749,34 @@ pub async fn chat_send(
                                                             content = authoritative.to_owned();
                                                         }
                                                         completed = true;
+                                                        let elapsed =
+                                                            elapsed_millis(chat_started_at);
+                                                        let generation_elapsed =
+                                                            elapsed.saturating_sub(setup_ms);
+                                                        generation_ms = Some(generation_elapsed);
+                                                        let _ = on_event.send(
+                                                            ChatStreamEvent::GenerationFinished {
+                                                                run_id: task_run_id.clone(),
+                                                                performance: ChatPerformanceDto {
+                                                                    setup_ms,
+                                                                    first_text_ms,
+                                                                    generation_ms:
+                                                                        generation_elapsed,
+                                                                    total_ms: elapsed,
+                                                                    session_cache: if resumed {
+                                                                        ChatSessionCacheStatusDto::Warm
+                                                                    } else {
+                                                                        ChatSessionCacheStatusDto::Cold
+                                                                    },
+                                                                    input_tokens: token_usage.input,
+                                                                    output_tokens: token_usage.output,
+                                                                    cache_read_tokens:
+                                                                        token_usage.cache_read,
+                                                                    cache_write_tokens:
+                                                                        token_usage.cache_write,
+                                                                },
+                                                            },
+                                                        );
                                                     }
                                                     Err(error) => failure = Some(error.message),
                                                 }
@@ -2688,7 +2912,8 @@ pub async fn chat_send(
         }
 
         if aborted {
-            let progress_snapshot = progress.finish(now_ms(), true);
+            let progress_snapshot =
+                finish_chat_progress(&on_event, &task_run_id, &mut progress, now_ms(), true);
             let memories = capture
                 .memories
                 .lock()
@@ -2753,14 +2978,26 @@ pub async fn chat_send(
                                 memory_revision.clone(),
                                 execution_model.clone(),
                                 harness.clone(),
-                                progress.finish(now_ms(), false),
+                                finish_chat_progress(
+                                    &on_event,
+                                    &task_run_id,
+                                    &mut progress,
+                                    now_ms(),
+                                    false,
+                                ),
                             );
                             return;
                         }
                     };
                 let title = should_generate_title.then(|| fallback_title.clone());
                 let created_at_ms = now_ms();
-                let progress_snapshot = progress.finish(created_at_ms, false);
+                let progress_snapshot = finish_chat_progress(
+                    &on_event,
+                    &task_run_id,
+                    &mut progress,
+                    created_at_ms,
+                    false,
+                );
                 let artifact_commits = capture.artifacts.lock().await.clone();
                 let artifact_refs = artifact_commits
                     .iter()
@@ -2884,6 +3121,23 @@ pub async fn chat_send(
                             if title_applied { title.clone() } else { None },
                             &execution_model,
                             &harness,
+                            ChatPerformanceDto {
+                                setup_ms,
+                                first_text_ms,
+                                generation_ms: generation_ms.unwrap_or_else(|| {
+                                    elapsed_millis(chat_started_at).saturating_sub(setup_ms)
+                                }),
+                                total_ms: elapsed_millis(chat_started_at),
+                                session_cache: if resumed {
+                                    ChatSessionCacheStatusDto::Warm
+                                } else {
+                                    ChatSessionCacheStatusDto::Cold
+                                },
+                                input_tokens: token_usage.input,
+                                output_tokens: token_usage.output,
+                                cache_read_tokens: token_usage.cache_read,
+                                cache_write_tokens: token_usage.cache_write,
+                            },
                         );
                     }
                     Err(error) => {
@@ -2908,6 +3162,23 @@ pub async fn chat_send(
                                 recovered_title,
                                 &execution_model,
                                 &harness,
+                                ChatPerformanceDto {
+                                    setup_ms,
+                                    first_text_ms,
+                                    generation_ms: generation_ms.unwrap_or_else(|| {
+                                        elapsed_millis(chat_started_at).saturating_sub(setup_ms)
+                                    }),
+                                    total_ms: elapsed_millis(chat_started_at),
+                                    session_cache: if resumed {
+                                        ChatSessionCacheStatusDto::Warm
+                                    } else {
+                                        ChatSessionCacheStatusDto::Cold
+                                    },
+                                    input_tokens: token_usage.input,
+                                    output_tokens: token_usage.output,
+                                    cache_read_tokens: token_usage.cache_read,
+                                    cache_write_tokens: token_usage.cache_write,
+                                },
                             );
                         } else {
                             failure = Some(error.message);
@@ -2917,7 +3188,8 @@ pub async fn chat_send(
             }
         }
         if failure.is_some() {
-            let progress_snapshot = progress.finish(now_ms(), false);
+            let progress_snapshot =
+                finish_chat_progress(&on_event, &task_run_id, &mut progress, now_ms(), false);
             if terminal_completion_claimed {
                 let _ = persist_or_emit_failed_chat(
                     app_state.store.as_ref(),
@@ -2979,6 +3251,36 @@ mod memory_skill_policy_tests {
             assert!(!use_memory, "unexpected match for {prompt}");
             assert!(!update_memory, "unexpected match for {prompt}");
         }
+    }
+
+    #[test]
+    fn assistant_token_usage_sums_provider_and_cache_tokens_safely() {
+        let mut usage = AssistantTokenUsage::default();
+        usage.observe_message_end(&serde_json::json!({
+            "message": {
+                "role": "assistant",
+                "usage": {
+                    "input": 120,
+                    "output": 30,
+                    "cacheRead": 90,
+                    "cacheWrite": 12
+                }
+            }
+        }));
+        usage.observe_message_end(&serde_json::json!({
+            "message": {
+                "role": "assistant",
+                "usage": {"input": 20, "output": 5}
+            }
+        }));
+        usage.observe_message_end(&serde_json::json!({
+            "message": {"role": "tool"}
+        }));
+
+        assert_eq!(usage.input, 140);
+        assert_eq!(usage.output, 35);
+        assert_eq!(usage.cache_read, 90);
+        assert_eq!(usage.cache_write, 12);
     }
 
     #[test]
@@ -3098,7 +3400,10 @@ mod memory_skill_policy_tests {
                 message: "malformed event".into(),
             }
         )));
-        assert_eq!(pi_event_stream_failure(RecvError::Lagged(1)), None);
+        assert_eq!(
+            pi_event_stream_failure(RecvError::Lagged(1)),
+            Some("Pi event stream fell behind and was stopped safely")
+        );
         assert_eq!(
             pi_event_stream_failure(RecvError::Closed),
             Some("Pi event stream was interrupted")

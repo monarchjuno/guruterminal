@@ -551,8 +551,16 @@ const streamChat = async (
     startedAtMs: Date.now(),
     items: [],
   };
-  const emitProgress = () =>
-    observer({ type: "progress", run_id, progress: clone(progress) });
+  let progressSequence = 0;
+  const emitProgress = () => {
+    observer({
+      type: "progress",
+      run_id,
+      sequence: progressSequence,
+      progress: clone(progress),
+    });
+    progressSequence += 1;
+  };
   const setProgress = (
     id: string,
     action: string,
